@@ -1,0 +1,20 @@
+name: causal-irl-env
+channels:
+  - defaults
+  - conda-forge
+  - pytorch
+dependencies:
+  - python=3.10
+  - numpy
+  - scipy
+  - pandas
+  - matplotlib
+  - seaborn
+  - tqdm
+  - pyyaml
+  - networkx
+  - pytest
+  - pip
+  - pip:
+      - gymnasium
+      - torch

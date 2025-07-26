@@ -1,0 +1,33 @@
+env:
+  name: "GridWorld"
+  grid_size: [5, 5]
+  reward_type: "sparse"
+  slip_prob: 0.0
+  terminal_states: [[4, 4]]
+  confounded: false
+  state_representation: "onehot"
+
+expert:
+  num_trajectories: 20
+  optimality: "optimal"
+  confounder_value: 0
+
+irl:
+  method: "causal_airl"
+  gamma: 0.99
+  horizon: 100
+  max_iters: 100
+  lr: 0.01
+  l1_bound: 1.0
+  latent_dim: 2   
+
+train:
+  batch_size: 64
+  seed: 42
+  verbose: true
+
+eval:
+  test_z: null
+  plot: true
+  generalisation: false
+  save_dir: "results/gridworld_baselines/"

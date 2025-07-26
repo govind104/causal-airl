@@ -1,0 +1,11 @@
+gymnasium
+numpy
+scipy
+torch
+matplotlib
+seaborn
+pandas
+tqdm
+PyYAML
+networkx
+pytest
