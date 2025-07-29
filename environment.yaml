@@ -19,4 +19,4 @@ dependencies:
       - gymnasium
       - torch
       - GitPython
-      = psutil
+      - psutil
