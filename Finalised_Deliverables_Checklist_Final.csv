@@ -1,0 +1,29 @@
+ID,Description,Output Format,Variables,Linked Section
+reward_correlation,Reward correlation (Pearson),line_plot + table,"method, N, reward type","Ch. 6: Classical IRL, AIRL"
+reward_mse,Reward MSE,line_plot or table,"method, N",Ch. 6: Reward-level metrics
+reward_variance_Z,Reward variance across Z,bar_plot or table,"method, confounder",Ch. 6: Causal-AIRL results
+reward_generalisation,Reward generalisation (unseen states),table,method,Ch. 6: Generalisation
+policy_agreement,Policy agreement,line_plot,"method, N","Ch. 6: AIRL, Ablations"
+value_function_diff,Value function L2 difference,line_plot,method,Ch. 6: Classical IRL
+trajectory_overlap,Trajectory overlap (Jaccard / edit dist),table,method,Ch. 6: Policy metrics
+reward_invariance_Z,Reward invariance across Z,bar_plot of Var_Z(R(s)),"method, Z",Ch. 6: Causal-AIRL
+confounder_robustness,Robustness to confounding,table,method,"Ch. 6: Confounding Ablation, Sanity Checks"
+reward_heatmaps,Reward heatmaps (GridWorld only),"≥3 per method (sparse, shaped, confounded)",all methods,"Ch. 6: Classical IRL, AIRL, Causal-AIRL"
+policy_vector_fields,Policy vector fields / direction maps,≥2,"AIRL, Causal-AIRL",Ch. 6: Qualitative Analysis
+rollout_overlays,Rollout overlays (expert vs learned),≥3,all,"Ch. 6: Qualitative, Generalisation"
+reward_landscape,Reward landscape visualisations,optional,Causal-AIRL,Ch. 6: Qualitative Analysis
+ablation_N,# Trajectories (N),line_plots,reward corr / policy agreement,Ch. 6: Ablation
+ablation_reward_type,Reward type,line_plot + visuals,reward corr / heatmaps,Ch. 6: Reward Type Sensitivity
+ablation_confounder,Confounder on/off,bar/line plots,"reward variance, policy match",Ch. 6: Confounding
+ablation_transition_stochasticity,Transition stochasticity,line_plot,policy accuracy,Ch. 6: Transition Noise
+ablation_gamma,Gamma misspecification,line_plot,reward & value metrics,Ch. 6: Gamma Ablation
+generalisation_heldout,Generalisation to held-out states,table + rollout visuals,policy quality,Ch. 6: Generalisation
+generalisation_perturbation,Generalisation under env perturbation,heatmaps + bar chart,reward/policy change,Ch. 6: Perturbations
+generalisation_multi_expert,Cross-policy recovery,heatmap grid,reward stability,Ch. 6: Multi-expert Generalisation
+cartpole_eval_reward,Reward visualisation (CartPole),line_plot or heatmap,method,Ch. 6: Deep IRL (CartPole)
+cartpole_eval_policy,Policy evaluation (CartPole),line_plot,method,Ch. 6: Deep IRL (CartPole)
+summary_performance,All-methods performance summary,table,"reward corr, value diff, policy match",Ch. 6: Overview
+summary_generalisation,Generalisation comparison,table,accuracy under unseen states/transitions,Ch. 6: Generalisation
+summary_confounding,Confounder robustness summary,table,reward variance across expert types,Ch. 6: Causal-AIRL
+causal_graph_schematic,Visual diagram of SCM structure (Z → s → a → s'),causal_graph,conceptual,Ch. 4:  Causal-AIRL
+training_diagnostics,Training loss / discriminator loss / SAC return during training,line_plot,"method, episode",Ch. 6: Deep IRL (CartPole)
