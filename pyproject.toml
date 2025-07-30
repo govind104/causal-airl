@@ -1,0 +1,19 @@
+[build-system]
+requires = [
+    "setuptools>=64",
+    "wheel",
+    "numpy",
+    "scipy",
+    "torch",
+    "matplotlib",
+    "seaborn",
+    "pandas",
+    "tqdm",
+    "PyYAML",
+    "networkx",
+    "gymnasium[classic_control]",
+    "psutil",
+    "GitPython",
+    "scikit-learn"
+]
+build-backend = "setuptools.build_meta"

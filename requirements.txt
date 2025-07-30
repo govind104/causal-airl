@@ -1,0 +1,14 @@
+gymnasium[classic_control]
+numpy
+scipy
+torch
+matplotlib
+seaborn
+pandas
+tqdm
+PyYAML
+networkx
+pytest
+scikit-learn
+psutil
+GitPython
