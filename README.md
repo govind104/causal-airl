@@ -2,7 +2,7 @@
 
 This repository contains all code, experiments, and visualisations for the MSc dissertation titled:
 
-**"Causal Inverse Reinforcement Learning for Robust Reward Recovery under Confounding"**
+**"Causal Inverse Reinforcement Learning for Robust Reward Recovery"**
 
 ## 🧠 Overview
 
