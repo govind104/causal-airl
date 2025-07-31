@@ -2,6 +2,7 @@ env:
   name: "GridWorld"
   grid_size: [5, 5]
   reward_type: "sparse"
+  reward_value: 1.0
   slip_prob: 0.0  # Will be overridden in sweeps
   terminal_states: [[4, 4]]
   confounded: false

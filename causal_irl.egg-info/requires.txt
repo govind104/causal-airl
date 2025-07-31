@@ -1,0 +1,13 @@
+numpy
+scipy
+torch
+matplotlib
+gymnasium[classic_control]
+seaborn
+pandas
+tqdm
+PyYAML
+networkx
+psutil
+GitPython
+scikit-learn

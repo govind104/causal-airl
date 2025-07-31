@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: causal_irl
+Version: 0.1
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: torch
+Requires-Dist: matplotlib
+Requires-Dist: gymnasium[classic_control]
+Requires-Dist: seaborn
+Requires-Dist: pandas
+Requires-Dist: tqdm
+Requires-Dist: PyYAML
+Requires-Dist: networkx
+Requires-Dist: psutil
+Requires-Dist: GitPython
+Requires-Dist: scikit-learn
+Dynamic: requires-dist
