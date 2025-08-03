@@ -6,6 +6,7 @@ env:
   slip_prob: 0.1
   terminal_states: [[4, 4]]
   confounded: true
+  confounder_value: 1
   confounder_profile: z1
   state_representation: "onehot"
 

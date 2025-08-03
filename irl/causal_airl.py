@@ -20,9 +20,10 @@ class CausalPrior(nn.Module):
     def __init__(self, latent_dim):
         super().__init__()
         self.latent_dim = latent_dim
+        self._device_anchor = nn.Parameter(torch.empty(0))
 
     def forward(self, batch_size):
-        device = next(self.parameters()).device
+        device = self._device_anchor.device
         return Normal(torch.zeros(batch_size, self.latent_dim, device=device),
                      torch.ones(batch_size, self.latent_dim, device=device))
 

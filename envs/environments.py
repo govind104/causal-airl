@@ -147,7 +147,8 @@ class GridWorld(BaseEnv):
                         next_s = (i + delta_pos[0], j + delta_pos[1])
                         if not self.in_bounds(next_s):
                             next_s = s
-                        r = self.compute_reward(next_s)
+                        r = float(self.compute_reward(next_s))
+                        assert np.isscalar(V[next_s]), f"V[next_s] is not scalar: shape={np.shape(V[next_s])}"
                         q_vals.append(r + self.gamma * V[next_s])
                     best_q = max(q_vals)
                     best_a = np.argmax(q_vals)
@@ -489,12 +490,6 @@ class CartPoleWrapper(BaseEnv):
         done = terminated or truncated
         return next_obs, reward, done, info
 
-    def _set_cartpole_length(env, length):
-        try:
-            env.env.length = length
-        except AttributeError:
-            raise RuntimeError("Unable to set pole length. Gym version mismatch.")
-
     def set_confounder(self, z: float):
         """
         Set pole length (confounder). Must be called after reset() in Gym.
@@ -502,7 +497,10 @@ class CartPoleWrapper(BaseEnv):
         if z not in self.confounder_values:
             raise ValueError(f"Invalid z value: {z}")
         self.z = z
-        self._set_cartpole_length(self.env, z)
+        try:
+            self.env.env.length = z
+        except AttributeError:
+            raise RuntimeError("Unable to set pole length. Gym version mismatch.")
 
     def sample_expert_trajectories(
         self,
