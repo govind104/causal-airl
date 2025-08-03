@@ -25,6 +25,7 @@ irl:
 
 train:
   batch_size: 64
+  epochs: 3
   seed: 42
   verbose: true
 

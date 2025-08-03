@@ -480,6 +480,7 @@ class CartPoleWrapper(BaseEnv):
         self.env.reset(seed=seed)
         self.confounder_values = confounder_values or [0.5, 1.0]  # Short vs. long pole
         self.z = None
+        self.n_actions = self.env.action_space.n
 
     def reset(self) -> np.ndarray:
         obs, _ = self.env.reset()
@@ -564,7 +565,7 @@ def build_env(cfg: dict) -> BaseEnv:
             reward_value=env_cfg['reward_value'],
             gamma=cfg['irl']['gamma'],
             slip_prob=env_cfg.get('slip_prob', 0.0),
-            seed=seed
+            seed=env_cfg.get("seed", None)
         )
     elif name == "SlipperyGridWorld":
         return SlipperyGridWorld(
@@ -574,7 +575,7 @@ def build_env(cfg: dict) -> BaseEnv:
             reward_value=env_cfg['reward_value'],
             gamma=cfg['irl']['gamma'],
             slip_prob=env_cfg['slip_prob'],
-            seed=seed
+            seed=env_cfg.get("seed", None)
         )
     elif name == "ConfoundedGridWorld":
         return ConfoundedGridWorld(
@@ -585,12 +586,13 @@ def build_env(cfg: dict) -> BaseEnv:
             gamma=cfg['irl']['gamma'],
             slip_prob=env_cfg.get('slip_prob', 0.0),
             confounder_value=env_cfg['confounder_value'],
-            seed=seed
+            seed=env_cfg.get("seed", None)
         )
     elif name == "CartPole":
         return CartPoleWrapper(
-            confounder_values=env_cfg['confounder_values'],
-            seed=seed
+            render_mode=env_cfg.get("render_mode", None),
+            confounder_values=env_cfg.get('confounder_values', [0.5, 1.0]),
+            seed=env_cfg.get("seed", None)
         )
     else:
         raise ValueError(f"Unknown environment: {name}")

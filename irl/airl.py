@@ -192,26 +192,64 @@ class AIRLAgent:
         return loss.item()
 
     def extract_reward(self, env) -> np.ndarray:
-        """Compute learned reward across all states"""
+        """
+        Compute learned reward over representative states.
+        Compatible with:
+        - Custom GridWorld (via env.get_all_states)
+        - Gymnasium CartPole-v1 (via dynamic rollouts)
+        """
         self.discriminator.eval()
 
-        states_np = np.array(env.get_all_states(), dtype=np.float32)
-        assert states_np.shape[0] == env.n_states, \
-            f"Mismatch: {states_np.shape[0]} states vs env.n_states = {env.n_states}"
+        if hasattr(env, 'get_all_states'):
+            print("[AIRL] Using full GridWorld state enumeration.")
+            states_np = np.array(env.get_all_states(), dtype=np.float32)
 
-        assert len(set(map(tuple, states_np))) == env.n_states, "Non-unique states returned"
+        else:
+            print("[AIRL] Using replay-based state sampling for reward extraction.")
 
-        states = torch.from_numpy(states_np).to(self.device)
-        dummy_actions = torch.zeros(len(states), dtype=torch.long, device=self.device)
+            def collect_states(policy, episodes=10):
+                states = []
+                H_max = env.spec.max_episode_steps if hasattr(env, "spec") and env.spec else 200
+
+                with torch.no_grad():
+                    for _ in range(episodes):
+                        s_raw = env.reset()
+                        s = s_raw[0] if isinstance(s_raw, tuple) else s_raw
+                        for _ in range(H_max):
+                            states.append(s)
+                            s_tensor = torch.tensor(s, dtype=torch.float32, device=self.device).unsqueeze(0)
+                            dist = policy(s_tensor)
+                            a = dist.sample().item()
+                            s, _, done, truncated, _ = env.step(a)
+                            if done or truncated:
+                                break
+                return states
+
+            agent_states = collect_states(self.policy)
+            reset_states = []
+            for _ in range(50):
+                s_raw = env.reset()
+                s = s_raw[0] if isinstance(s_raw, tuple) else s_raw
+                reset_states.append(s)
+            all_states = agent_states + reset_states
+
+            states_np = np.array(all_states, dtype=np.float32)
+            states_np = states_np[np.isfinite(states_np).all(axis=1)]
+            states_np = np.unique(states_np, axis=0)
+
+            if len(states_np) == 0:
+                raise RuntimeError("No valid states collected for reward extraction.")
+
+            print(f"[AIRL] Sampled {len(all_states)} raw states, "
+                f"{len(states_np)} unique valid states.")
+
+        states = torch.tensor(states_np, dtype=torch.float32, device=self.device)
+        dummy_actions = torch.zeros(len(states), dtype=torch.long, device=self.device)  # Assumes discrete actions
 
         with torch.no_grad():
             rewards = self.discriminator.reward(states, dummy_actions, states)
 
-        rewards_np = rewards.cpu().numpy()
-        assert rewards_np.shape[0] == env.n_states, \
-            f"Reward shape mismatch: got {rewards_np.shape[0]}, expected {env.n_states}"
-
-        return rewards_np
+        return rewards.cpu().numpy()
 
     def train(
         self,
@@ -282,41 +320,51 @@ class AIRLAgent:
         """Collect policy rollouts for training"""
         data = []
         self.policy.eval()
-        W, H = env.grid_size
-        n_states = W * H
-        min_path = (W - 1) + (H - 1)
-        H_max = min(int(2.0 * min_path + 5), 100)
 
-        for _ in range(episodes):
-            s = env.reset()
-            done = False
-            steps = 0
-            while not done and steps < H_max:
-                # Convert (x, y) state to one-hot vector
-                s_index = env.state_to_index(s, n_cols=H)
-                s_onehot = F.one_hot(torch.tensor([s_index], device=self.device), num_classes=n_states).float()
-                dist = self.policy(s_onehot)
-                a = dist.sample()
-                logp = dist.log_prob(a)
+        # Determine input representation
+        if hasattr(env, 'grid_size'):
+            W, H = env.grid_size
+            n_states = W * H
+            min_path = (W - 1) + (H - 1)
+            H_max = min(int(2.0 * min_path + 5), 100)
+            for _ in range(episodes):
+                s = env.reset()
+                done = False
+                steps = 0
+                while not done and steps < H_max:
+                    s_index = env.state_to_index(s, n_cols=H)
+                    s_onehot = F.one_hot(torch.tensor([s_index], device=self.device), num_classes=n_states).float()
+                    dist = self.policy(s_onehot)
+                    a = dist.sample()
+                    logp = dist.log_prob(a)
+                    s_next, _, done, _ = env.step(a.item())
+                    s_next_index = env.state_to_index(s_next, n_cols=H)
+                    s_next_onehot = F.one_hot(torch.tensor([s_next_index], device=self.device), num_classes=n_states).float()
+                    data.append((s_onehot.squeeze(0), a.squeeze(), s_next_onehot.squeeze(0), logp.squeeze()))
+                    s = s_next
+                    steps += 1
 
-                # Handle discrete and continuous actions
-                if isinstance(a, torch.Tensor):
-                    if a.ndim == 0:
-                        action_to_env = a.item()
-                    elif a.ndim == 1 and a.shape[0] == 1:
-                        action_to_env = a.item()
-                    else:
-                        action_to_env = a.cpu().numpy()
-                else:
-                    action_to_env = a
+        else:
+            # CartPole case — use raw float vectors
+            if hasattr(env, "spec") and env.spec is not None:
+                max_steps = env.spec.max_episode_steps
+            else:
+                max_steps = 200
+            for _ in range(episodes):
+                s = env.reset()
+                done = False
+                steps = 0
+                while not done and steps < max_steps:
+                    s_tensor = torch.tensor(s, dtype=torch.float32, device=self.device).unsqueeze(0)
+                    dist = self.policy(s_tensor)
+                    a = dist.sample()
+                    logp = dist.log_prob(a)
+                    s_next, _, done, _ = env.step(a.item())
+                    s_next_tensor = torch.tensor(s_next, dtype=torch.float32, device=self.device).unsqueeze(0)
+                    data.append((s_tensor.squeeze(0), a.squeeze(), s_next_tensor.squeeze(0), logp.squeeze()))
+                    s = s_next
+                    steps += 1
 
-                s_next, _, done, _ = env.step(action_to_env)
-                s_next_index = env.state_to_index(s_next, n_cols=H)
-                s_next_onehot = F.one_hot(torch.tensor([s_next_index], device=self.device), num_classes=n_states).float()
-
-                data.append((s_onehot.squeeze(0), a.squeeze(), s_next_onehot.squeeze(0), logp.squeeze()))
-                s = s_next
-                steps += 1
         return data
 
     def _process_agent_data(self, agent_data):
@@ -439,6 +487,11 @@ def create_gridworld_encoder(grid_size: int):
     def encoder(s: torch.Tensor):
         idx = s[:, 0].long() * grid_size + s[:, 1].long()
         return F.one_hot(idx, num_classes=grid_size**2).float()
+    return encoder
+
+def create_cartpole_encoder():
+    def encoder(s: torch.Tensor):
+        return s.float()  # Ensure tensor is float32
     return encoder
 
 def save_model(model: nn.Module, path: str):

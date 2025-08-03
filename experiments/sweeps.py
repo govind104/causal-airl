@@ -23,7 +23,7 @@ def sweep_grid(base_config, sweep_params, save_dir_root):
             current = config
             for part in key_parts[:-1]:
                 current = current.setdefault(part, {})
-            current[key_parts[-1]] = v
+            current[key_parts[-1]] = yaml.safe_load(v)
             name_parts.append(f"{key_parts[-1]}-{v}")
         
         # Create run directory

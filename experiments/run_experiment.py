@@ -12,10 +12,10 @@ from scipy.sparse import issparse
 
 from irl.ng_russell import run_ng_russell, log_memory
 from irl.maxent_irl import run_maxent_irl, soft_value_iteration, compute_policy_from_value
-from irl.airl import AIRLAgent, create_gridworld_encoder, create_onehot_encoder
+from irl.airl import AIRLAgent, create_gridworld_encoder, create_onehot_encoder, create_cartpole_encoder
 from irl.causal_airl import CausalAIRLAgent
 
-from envs.environments import BaseEnv, build_env
+from envs.environments import BaseEnv, CartPoleWrapper, build_env
 from experiments.logger import TrainingLogger
 from experiments.eval import evaluate_irl_result, compute_trajectory_overlap, compute_reward_variance
 
@@ -199,11 +199,17 @@ def run_experiment(cfg):
         if hasattr(env, 'n_states'): 
             assert reward.shape[0] == env.n_states, f"Reward shape mismatch: {reward.shape[0]} vs {env.n_states}"
     elif method == 'airl':
-        state_encoder = create_gridworld_encoder(grid_size=env.grid_size[0])
+        state_encoder = create_cartpole_encoder() if isinstance(env, CartPoleWrapper) else create_gridworld_encoder(grid_size=env.grid_size[0])
         action_encoder = create_onehot_encoder(num_classes=env.n_actions)
+        if isinstance(env, CartPoleWrapper):
+            state_dim = env.observation_space.shape[0]
+            action_dim = env.action_space.n
+        else:
+            state_dim = env.n_states
+            action_dim = env.n_actions
         agent = AIRLAgent(
-            state_dim=env.n_states,
-            action_dim=env.n_actions,
+            state_dim=state_dim,
+            action_dim=action_dim,
             gamma=cfg['irl']['gamma'],
             lr=cfg['irl']['lr'],
             state_encoder=state_encoder,
@@ -221,14 +227,24 @@ def run_experiment(cfg):
             **agent_data
         }
     elif method == 'causal_airl':
+        state_encoder = create_cartpole_encoder() if isinstance(env, CartPoleWrapper) else create_gridworld_encoder(grid_size=env.grid_size[0])
+        action_encoder = create_onehot_encoder(num_classes=env.n_actions)
+        if isinstance(env, CartPoleWrapper):
+            state_dim = env.observation_space.shape[0]
+            action_dim = env.action_space.n
+        else:
+            state_dim = env.n_states
+            action_dim = env.n_actions
         agent = CausalAIRLAgent(
             env=env,
-            state_dim=env.n_states,
-            action_dim=env.n_actions,
+            state_dim=state_dim,
+            action_dim=action_dim,
             latent_dim=cfg['irl']['latent_dim'],
             gamma=cfg['irl']['gamma'],
             invariance_penalty=cfg['irl']['invariance_penalty'],
-            lr=cfg['irl']['lr']
+            lr=cfg['irl']['lr'],
+            state_encoder=state_encoder,
+            action_encoder=action_encoder
         )
         reward, metrics, agent_data = agent.train(cfg, env, demos)
         wrapped_metrics = TrainingLogger()
