@@ -78,3 +78,4 @@ experiments/__pycache__/
 tests/__pycache__/
 irl/__pycache__/
 envs/__pycache__/
+causal_irl.egg-info/
