@@ -2,6 +2,7 @@ env:
   name: "ConfoundedGridWorld"
   grid_size: [5, 5]
   reward_type: "sparse"
+  reward_value: 1.0
   slip_prob: 0.1
   terminal_states: [[4, 4]]
   confounded: true
