@@ -1,0 +1,80 @@
+# === Python build artifacts ===
+__pycache__/
+*.py[cod]
+*.so
+
+# === Virtual environments ===
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# === IDE/editor configs ===
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# === Test/output artifacts ===
+*.log
+*.out
+*.err
+*.tmp
+*.bak
+*.swp
+
+# === Experiment outputs ===
+results/
+logs/
+*.pdf
+*.png
+*.jpg
+*.mp4
+*.gif
+
+# === PyTorch/NumPy caches ===
+*.pth
+*.npz
+*.npy
+
+# === Checkpoints and models ===
+checkpoints/
+*.pt
+*.ckpt
+
+# === Project-specific ===
+causal_irl.egg-info/
+dist/
+build/
+
+# === Jupyter Notebooks ===
+.ipynb_checkpoints/
+
+# === Pytest and coverage ===
+.pytest_cache/
+.coverage
+.cache/
+htmlcov/
+
+# === Data ===
+data/
+*.csv
+*.jsonl
+*.gz
+*.zip
+
+# === VSCode settings ===
+*.code-workspace
+
+# === Auto-generated SCM diagrams ===
+visualisation/__pycache__/
+
+# === Optional - specific logs/configs ===
+scripts/__pycache__/
+experiments/__pycache__/
+tests/__pycache__/
+irl/__pycache__/
+envs/__pycache__/
