@@ -165,7 +165,8 @@ def run_experiment(cfg):
     log_memory("Before Environment Building")
     # Build environment and sample demonstrations
     env = build_env(cfg)
-    env.reset_transition_cache()
+    if hasattr(env, "reset_transition_cache"):
+        env.reset_transition_cache()
     demos = env.sample_expert_trajectories(
         n_trajectories=cfg['expert']['num_trajectories'],
         optimality=cfg['expert']['optimality'],

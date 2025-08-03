@@ -22,8 +22,9 @@ class CausalPrior(nn.Module):
         self.latent_dim = latent_dim
 
     def forward(self, batch_size):
-        return Normal(torch.zeros(batch_size, self.latent_dim),
-                     torch.ones(batch_size, self.latent_dim))
+        device = next(self.parameters()).device
+        return Normal(torch.zeros(batch_size, self.latent_dim, device=device),
+                     torch.ones(batch_size, self.latent_dim, device=device))
 
 class CausalEncoder(nn.Module):
     """Encoder with causal structure awareness"""

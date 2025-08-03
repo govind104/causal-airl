@@ -122,11 +122,11 @@ class GridWorld(BaseEnv):
 
     def compute_reward(self, pos: Tuple[int, int]) -> float:
         if self.reward_type == "sparse":
-            return self.reward_value if pos in self.terminal_states else 0.0
+            return float(self.reward_value) if pos in self.terminal_states else 0.0
         elif self.reward_type == "shaped":
             goal = self.terminal_states[0]
             dist = np.linalg.norm(np.array(pos) - np.array(goal), ord=1)
-            return -dist
+            return float(-dist)
         else:
             raise ValueError(f"Unknown reward_type {self.reward_type}")
 
