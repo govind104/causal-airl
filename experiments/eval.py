@@ -120,12 +120,12 @@ def compute_trajectory_overlap(expert_trajs, learned_trajs):
     expert_states = set()
     for traj in expert_trajs:
         for (s, a, r, s_next) in traj:
-            expert_states.add(tuple(s))
+            expert_states.add(tuple(s) if hasattr(s, '__iter__') else (s,))
     
     learned_states = set()
     for traj in learned_trajs:
         for (s, a) in traj:
-            learned_states.add(tuple(s))
+            learned_states.add(tuple(s) if hasattr(s, '__iter__') else (s,))
     
     intersection = expert_states & learned_states
     union = expert_states | learned_states

@@ -50,7 +50,10 @@ def save_trajectories(policy, env, n_traj=10, z=None, torch_policy=True, device=
         done = False
         while not done and len(traj) < 1000:  # Prevent infinite loops
             if torch_policy:
-                s_tensor = torch.FloatTensor(s).unsqueeze(0).to(device)
+                if isinstance(s, (int, np.integer)):
+                    s_tensor = torch.tensor([[s]], dtype=torch.float32, device=device)
+                else:
+                    s_tensor = torch.FloatTensor(s).unsqueeze(0).to(device)
                 s_encoded = state_encoder(s_tensor)
                 dist = policy(s_encoded)
                 a = dist.probs.argmax(dim=-1).item()
@@ -205,7 +208,7 @@ def run_experiment(cfg):
         if hasattr(env, 'n_states'): 
             assert reward.shape[0] == env.n_states, f"Reward shape mismatch: {reward.shape[0]} vs {env.n_states}"
     elif method == 'airl':
-        state_encoder = create_cartpole_encoder() if isinstance(env, CartPoleWrapper) else create_gridworld_encoder(grid_size=env.grid_size[0])
+        state_encoder = create_cartpole_encoder() if isinstance(env, CartPoleWrapper) else lambda x: x
         action_encoder = create_onehot_encoder(num_classes=env.n_actions)
         if isinstance(env, CartPoleWrapper):
             state_dim = env.observation_space.shape[0]

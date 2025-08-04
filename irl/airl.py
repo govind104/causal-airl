@@ -162,7 +162,9 @@ class AIRLAgent:
             action_encoder=self.action_encoder
         ).to(self.device)
         
-        self.policy = PolicyNet(state_dim, action_dim).to(self.device)
+        dummy_input = torch.zeros(1, state_dim)
+        encoded_dim = self.state_encoder(dummy_input).shape[1]
+        self.policy = PolicyNet(encoded_dim, action_dim).to(self.device)
         
         self.optimizer_d = torch.optim.Adam(
             self.discriminator.parameters(), lr=lr
@@ -218,7 +220,8 @@ class AIRLAgent:
                         for _ in range(H_max):
                             states.append(s)
                             s_tensor = torch.tensor(s, dtype=torch.float32, device=self.device).unsqueeze(0)
-                            dist = policy(s_tensor)
+                            s_encoded = self.state_encoder(s_tensor)
+                            dist = policy(s_encoded)
                             a = dist.sample().item()
                             step_out = env.step(a)
                             if len(step_out) == 5:
@@ -289,11 +292,10 @@ class AIRLAgent:
             
             # Update policy with learned rewards
             with torch.no_grad():
-                rewards = self.discriminator.reward(
-                    s_pi, a_pi, s_ppi, log_pi
-                ).detach()
+                s_pi_encoded = self.state_encoder(s_pi)
+                rewards = self.discriminator.reward(s_pi, a_pi, s_ppi, log_pi).detach()
             
-            policy_loss = self.update_policy(s_pi, a_pi.squeeze(), rewards)
+            policy_loss = self.update_policy(s_pi_encoded, a_pi.squeeze(), rewards)
             self.logger.log({"policy_loss": policy_loss})
         
         # Final evaluation
@@ -316,10 +318,7 @@ class AIRLAgent:
         s_raw = torch.stack(s_list).to(self.device)
         s_prime_raw = torch.stack(s_prime_list).to(self.device)
 
-        s_enc = self.discriminator.state_encoder(s_raw)
-        s_prime_enc = self.discriminator.state_encoder(s_prime_raw)
-
-        return s_enc, torch.stack(a_list).squeeze().to(self.device), s_prime_enc
+        return s_raw, torch.stack(a_list).squeeze().to(self.device), s_prime_raw
 
     def _collect_agent_rollouts(self, env, episodes=10):
         """Collect policy rollouts for training"""
@@ -338,14 +337,16 @@ class AIRLAgent:
                 steps = 0
                 while not done and steps < H_max:
                     s_index = env.state_to_index(s, n_cols=H)
-                    s_onehot = F.one_hot(torch.tensor([s_index], device=self.device), num_classes=n_states).float()
-                    dist = self.policy(s_onehot)
+                    s_tensor = torch.tensor([[s_index]], dtype=torch.float32, device=self.device)
+                    s_encoded = self.state_encoder(s_tensor)
+                    dist = self.policy(s_encoded)
                     a = dist.sample()
                     logp = dist.log_prob(a)
                     s_next, _, done, _ = env.step(a.item())
                     s_next_index = env.state_to_index(s_next, n_cols=H)
-                    s_next_onehot = F.one_hot(torch.tensor([s_next_index], device=self.device), num_classes=n_states).float()
-                    data.append((s_onehot.squeeze(0), a.squeeze(), s_next_onehot.squeeze(0), logp.squeeze()))
+                    s_next_tensor = torch.tensor([[s_next_index]], dtype=torch.float32, device=self.device)
+                    s_next_encoded = self.state_encoder(s_next_tensor)
+                    data.append((s_encoded.squeeze(0), a.squeeze(), s_next_encoded.squeeze(0), logp.squeeze()))
                     s = s_next
                     steps += 1
 
@@ -422,7 +423,7 @@ def update_discriminator(
 
     # Compute expert log probs using current policy
     with torch.no_grad():
-        dist_e = policy(s_e)
+        dist_e = policy(discriminator.state_encoder(s_e))
         log_pi_e = dist_e.log_prob(a_e).unsqueeze(1)  # (B,) -> (B,1)
 
     # Create dataset
@@ -490,8 +491,17 @@ def create_continuous_encoder(input_dim: int):
 def create_gridworld_encoder(grid_size: int):
     """Optimized gridworld encoder (2x faster)"""
     def encoder(s: torch.Tensor):
-        idx = s[:, 0].long() * grid_size + s[:, 1].long()
-        return F.one_hot(idx, num_classes=grid_size**2).float()
+        if s.shape[1] == 1:
+            idx = s[:, 0].long()
+            row = idx // grid_size
+            col = idx % grid_size
+        elif s.shape[1] == 2:
+            row = s[:, 0].long()
+            col = s[:, 1].long()
+        else:
+            raise ValueError(f"Invalid state shape: {s.shape}")
+        flat = row * grid_size + col
+        return F.one_hot(flat, num_classes=grid_size**2).float()
     return encoder
 
 def create_cartpole_encoder():
