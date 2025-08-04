@@ -433,8 +433,13 @@ class CausalAIRLAgent:
                             s_tensor = torch.tensor(s, dtype=torch.float32, device=self.device).unsqueeze(0)
                             dist = policy(s_tensor)
                             a = dist.sample().item()
-                            s, _, done, truncated, _ = env.step(a)
-                            if done or truncated:
+                            step_out = env.step(a)
+                            if len(step_out) == 5:
+                                s, _, terminated, truncated, _ = step_out
+                            else:
+                                s, _, terminated, truncated = step_out
+
+                            if terminated or truncated:
                                 break
                 return states
 
@@ -456,10 +461,14 @@ class CausalAIRLAgent:
             print(f"[CausalAIRL] Sampled {len(all_states)} raw states, {len(raw_states)} unique valid states.")
 
         states = self.state_encoder(torch.tensor(raw_states, dtype=torch.float32, device=self.device))
-        dummy_actions = torch.zeros(len(states), dtype=torch.long, device=self.device)
+        # dummy_actions = torch.zeros(len(states), dtype=torch.long, device=self.device)
+        dummy_actions = torch.arange(self.action_dim, device=self.device).repeat(len(states) // self.action_dim + 1)[:len(states)]
         actions = self.action_encoder(dummy_actions)
+        assert actions.shape[1] == self.action_dim, \
+            f"[CausalAIRL] Encoded actions shape mismatch: got {actions.shape[1]}, expected {self.action_dim}"
 
-        z_tensor = torch.tensor(z_value, dtype=torch.float32, device=self.device).view(1, -1).repeat(len(states), 1)
+        z_tensor = torch.full((len(states), self.latent_dim), fill_value=0.0, device=self.device)
+        z_tensor[:, 0] = float(z_value)
 
         with torch.no_grad():
             r_inv = self.discriminator.r_invariant(states)
@@ -560,8 +569,13 @@ class CausalAIRLAgent:
                             s_tensor = torch.tensor(s, dtype=torch.float32, device=self.device).unsqueeze(0)
                             dist = policy(s_tensor)
                             a = dist.sample().item()
-                            s, _, done, truncated, _ = env.step(a)
-                            if done or truncated:
+                            step_out = env.step(a)
+                            if len(step_out) == 5:
+                                s, _, terminated, truncated, _ = step_out
+                            else:
+                                s, _, terminated, truncated = step_out
+
+                            if terminated or truncated:
                                 break
                 return states
 
@@ -583,8 +597,11 @@ class CausalAIRLAgent:
             print(f"[CausalAIRL] Sampled {len(all_states)} raw states, {len(raw_states)} unique valid states.")
 
         states = self.state_encoder(torch.tensor(raw_states, dtype=torch.float32, device=self.device))
-        dummy_actions = torch.zeros(len(states), dtype=torch.long, device=self.device)
+        # dummy_actions = torch.zeros(len(states), dtype=torch.long, device=self.device)
+        dummy_actions = torch.arange(self.action_dim, device=self.device).repeat(len(states) // self.action_dim + 1)[:len(states)]
         actions = self.action_encoder(dummy_actions)
+        assert actions.shape[1] == self.action_dim, \
+            f"[CausalAIRL] Encoded actions shape mismatch: got {actions.shape[1]}, expected {self.action_dim}"
 
         with torch.no_grad():
             z, _, _ = self.encoder(states, actions)
@@ -595,6 +612,7 @@ class CausalAIRLAgent:
             inv_reward.cpu().numpy(),
             causal_reward.cpu().numpy()
         )
+
     def _prepare_expert_data(self, demos):
         """Convert expert demos to tensors"""
         s_list, a_list, s_prime_list = [], [], []

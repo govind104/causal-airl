@@ -44,7 +44,8 @@ def save_trajectories(policy, env, n_traj=10, z=None, torch_policy=True, device=
     for _ in range(n_traj):
         if z is not None and hasattr(env, 'confounder_values'):
             env.z = z
-        s = env.reset()
+        s_raw = env.reset()
+        s = s_raw[0] if isinstance(s_raw, tuple) else s_raw
         traj = []
         done = False
         while not done and len(traj) < 1000:  # Prevent infinite loops
@@ -55,7 +56,12 @@ def save_trajectories(policy, env, n_traj=10, z=None, torch_policy=True, device=
                 a = dist.probs.argmax(dim=-1).item()
             else:
                 a = policy(s)  # For MaxEnt/Ng methods
-            s_next, _, done, _ = env.step(a)
+            step_out = env.step(a)
+            if len(step_out) == 5:
+                s_next, _, terminated, truncated, _ = step_out
+            else:
+                s_next, _, terminated, truncated = step_out
+            done = terminated or truncated
             traj.append((s, a))
             s = s_next
             if done:
@@ -216,12 +222,14 @@ def run_experiment(cfg):
             action_encoder=action_encoder
         )
         reward, metrics, agent_data = agent.train(cfg, env, demos)
+        print(f"[RUN] {method.upper()} reward shape: {reward.shape}, min={reward.min()}, max={reward.max()}")
         wrapped_metrics = TrainingLogger()
         wrapped_metrics.log(metrics)
         metrics = wrapped_metrics
         if hasattr(env, 'n_states'): 
             assert reward.shape[0] == env.n_states, f"Reward shape mismatch: {reward.shape[0]} vs {env.n_states}"
         additional_data = {
+            'reward': reward,
             'policy': agent.policy,
             'discriminator': agent.discriminator,
             **agent_data
@@ -247,6 +255,7 @@ def run_experiment(cfg):
             action_encoder=action_encoder
         )
         reward, metrics, agent_data = agent.train(cfg, env, demos)
+        print(f"[RUN] {method.upper()} reward shape: {reward.shape}, min={reward.min()}, max={reward.max()}")
         wrapped_metrics = TrainingLogger()
         wrapped_metrics.log(metrics)
         metrics = wrapped_metrics
@@ -254,6 +263,7 @@ def run_experiment(cfg):
             assert reward.shape[0] == env.n_states, f"Reward shape mismatch: {reward.shape[0]} vs {env.n_states}"
         additional_data = {
             'agent': agent,  # Store agent for later use
+            'reward': reward,
             'policy': agent.policy,
             'discriminator': agent.discriminator,
             'encoder': agent.encoder,
@@ -294,7 +304,15 @@ def run_experiment(cfg):
         if method in ['airl', 'causal_airl']:
             # Generate trajectories using learned policy
             policy = additional_data['policy'].to(device)
-            state_encoder = create_gridworld_encoder(grid_size=env.grid_size[0])
+
+            # Determine correct state encoder
+            if isinstance(env, CartPoleWrapper):
+                state_encoder = create_cartpole_encoder()
+            elif hasattr(env, 'grid_size'):
+                state_encoder = create_gridworld_encoder(grid_size=env.grid_size[0])
+            else:
+                raise ValueError("Unknown environment type for state encoder.")
+
             learned_trajectories = save_trajectories(
                 policy, env, n_traj=10, device=device, state_encoder=state_encoder
             )

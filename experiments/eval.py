@@ -134,6 +134,8 @@ def compute_trajectory_overlap(expert_trajs, learned_trajs):
 def compute_reward_variance(additional_data):
     """Compute reward variance across Z values"""
     if 'per_z_rewards' in additional_data and additional_data['per_z_rewards']:
-        stacked = np.stack(additional_data['per_z_rewards'])
-        return np.mean(np.var(stacked, axis=0))
+        reward_maps = additional_data['per_z_rewards']
+        min_len = min(r.shape[0] for r in reward_maps)
+        trimmed = np.stack([r[:min_len] for r in reward_maps])
+        return np.mean(np.var(trimmed, axis=0))
     return 0  # Other methods don't have Z-dependent rewards

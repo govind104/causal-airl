@@ -220,8 +220,13 @@ class AIRLAgent:
                             s_tensor = torch.tensor(s, dtype=torch.float32, device=self.device).unsqueeze(0)
                             dist = policy(s_tensor)
                             a = dist.sample().item()
-                            s, _, done, truncated, _ = env.step(a)
-                            if done or truncated:
+                            step_out = env.step(a)
+                            if len(step_out) == 5:
+                                s, _, terminated, truncated, _ = step_out
+                            else:
+                                s, _, terminated, truncated = step_out
+
+                            if terminated or truncated:
                                 break
                 return states
 

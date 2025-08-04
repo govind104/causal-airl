@@ -14,10 +14,10 @@ irl:
   method: "causal_airl"
   gamma: 0.99
   horizon: 200
-  max_iters: 500
+  max_iters: 50
   lr: 0.0003
   latent_dim: 3
-  num_z_samples: 10
+  num_z_samples: 2
   invariance_penalty: 0.1
   kl_weight_start: 0.05
   kl_weight_end: 1.0
@@ -26,8 +26,8 @@ irl:
   use_shaping: true
 
 train:
-  batch_size: 128
-  epochs: 4
+  batch_size: 32
+  epochs: 1
   seed: 42
   verbose: false
 

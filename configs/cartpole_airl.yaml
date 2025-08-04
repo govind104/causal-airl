@@ -14,7 +14,7 @@ irl:
   method: "airl"
   gamma: 0.99
   horizon: 200
-  max_iters: 500
+  max_iters: 50
   lr: 0.0003
   latent_dim: 4
   invariance_penalty: 0.2
@@ -24,8 +24,8 @@ irl:
   disc_steps_per_policy_step: 10 # Helps discriminator in high-dim setting
 
 train:
-  batch_size: 128
-  epochs: 4
+  batch_size: 32
+  epochs: 1
   seed: 42
   verbose: false
 
