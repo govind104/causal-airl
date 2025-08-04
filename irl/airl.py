@@ -14,6 +14,26 @@ from models.policy import PolicyNet
 def get_device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+def infer_encoded_dim(state_encoder, env=None):
+    """
+    Infer encoded state dimension using actual environment context.
+    This avoids ambiguities between GridWorld and CartPole inputs.
+    """
+    if hasattr(env, "observation_space"):  # Gym-style envs like CartPole
+        dummy = torch.zeros(1, env.observation_space.shape[0])
+    elif hasattr(env, "grid_size"):  # GridWorld envs
+        dummy = torch.zeros(1, 1, dtype=torch.long)  # index form
+    else:
+        raise ValueError("Cannot infer input shape without known env type.")
+
+    try:
+        out = state_encoder(dummy)
+        if out.ndim != 2:
+            raise ValueError("Encoded output must be 2D")
+        return out.shape[1]
+    except Exception as e:
+        raise ValueError(f"Failed to infer encoded dimension: {e}")
+
 class AIRLDiscriminator(nn.Module):
     """
     Improved AIRL-style discriminator with:
@@ -142,6 +162,7 @@ class AIRLAgent:
     """Complete AIRL agent with training and evaluation logic"""
     def __init__(
         self,
+        env: BaseEnv,
         state_dim: int,
         action_dim: int,
         gamma: float = 0.99,
@@ -162,8 +183,7 @@ class AIRLAgent:
             action_encoder=self.action_encoder
         ).to(self.device)
         
-        dummy_input = torch.zeros(1, state_dim)
-        encoded_dim = self.state_encoder(dummy_input).shape[1]
+        encoded_dim = infer_encoded_dim(self.state_encoder, env)
         self.policy = PolicyNet(encoded_dim, action_dim).to(self.device)
         
         self.optimizer_d = torch.optim.Adam(
@@ -267,7 +287,7 @@ class AIRLAgent:
     ) -> Tuple[np.ndarray, dict, dict]:
         """Full training loop for AIRL"""
         # Prepare expert data
-        s_e, a_e, s_pe = self._prepare_expert_data(demos)
+        s_e, a_e, s_pe = self._prepare_expert_data(demos, env)
         
         # Training loop
         for it in range(cfg['irl']['max_iters']):
@@ -305,7 +325,7 @@ class AIRLAgent:
             'discriminator': self.discriminator
         }
 
-    def _prepare_expert_data(self, demos):
+    def _prepare_expert_data(self, demos, env):
         """Convert expert demos to tensors"""
         s_list, a_list, s_prime_list = [], [], []
         for traj in demos:
@@ -314,9 +334,23 @@ class AIRLAgent:
                 a_list.append(torch.LongTensor([a]))
                 s_prime_list.append(torch.FloatTensor(s_prime))
 
-        # Stack and encode expert states using the agent's encoder
-        s_raw = torch.stack(s_list).to(self.device)
-        s_prime_raw = torch.stack(s_prime_list).to(self.device)
+        # Handle discrete GridWorld-style state indices
+        if hasattr(env, "grid_size"):
+            H = env.grid_size[1]
+            s_raw = torch.stack([
+                torch.tensor([[env.state_to_index(s.tolist(), n_cols=H)]], dtype=torch.float32)
+                for s in s_list
+            ]).squeeze(1).to(self.device)
+
+            s_prime_raw = torch.stack([
+                torch.tensor([[env.state_to_index(sp.tolist(), n_cols=H)]], dtype=torch.float32)
+                for sp in s_prime_list
+            ]).squeeze(1).to(self.device)
+
+        # Handle continuous state envs (e.g. CartPole)
+        else:
+            s_raw = torch.stack(s_list).to(self.device)
+            s_prime_raw = torch.stack(s_prime_list).to(self.device)
 
         return s_raw, torch.stack(a_list).squeeze().to(self.device), s_prime_raw
 
@@ -338,15 +372,13 @@ class AIRLAgent:
                 while not done and steps < H_max:
                     s_index = env.state_to_index(s, n_cols=H)
                     s_tensor = torch.tensor([[s_index]], dtype=torch.float32, device=self.device)
-                    s_encoded = self.state_encoder(s_tensor)
-                    dist = self.policy(s_encoded)
+                    dist = self.policy(self.state_encoder(s_tensor))
                     a = dist.sample()
                     logp = dist.log_prob(a)
                     s_next, _, done, _ = env.step(a.item())
                     s_next_index = env.state_to_index(s_next, n_cols=H)
                     s_next_tensor = torch.tensor([[s_next_index]], dtype=torch.float32, device=self.device)
-                    s_next_encoded = self.state_encoder(s_next_tensor)
-                    data.append((s_encoded.squeeze(0), a.squeeze(), s_next_encoded.squeeze(0), logp.squeeze()))
+                    data.append((s_tensor.squeeze(0), a.squeeze(), s_next_tensor.squeeze(0), logp.squeeze()))
                     s = s_next
                     steps += 1
 
@@ -423,7 +455,8 @@ def update_discriminator(
 
     # Compute expert log probs using current policy
     with torch.no_grad():
-        dist_e = policy(discriminator.state_encoder(s_e))
+        s_e_encoded = discriminator.state_encoder(s_e)
+        dist_e = policy(s_e_encoded)
         log_pi_e = dist_e.log_prob(a_e).unsqueeze(1)  # (B,) -> (B,1)
 
     # Create dataset

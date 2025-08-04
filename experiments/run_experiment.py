@@ -208,7 +208,7 @@ def run_experiment(cfg):
         if hasattr(env, 'n_states'): 
             assert reward.shape[0] == env.n_states, f"Reward shape mismatch: {reward.shape[0]} vs {env.n_states}"
     elif method == 'airl':
-        state_encoder = create_cartpole_encoder() if isinstance(env, CartPoleWrapper) else lambda x: x
+        state_encoder = create_cartpole_encoder() if isinstance(env, CartPoleWrapper) else create_gridworld_encoder(grid_size=env.grid_size[0])
         action_encoder = create_onehot_encoder(num_classes=env.n_actions)
         if isinstance(env, CartPoleWrapper):
             state_dim = env.observation_space.shape[0]
@@ -217,6 +217,7 @@ def run_experiment(cfg):
             state_dim = env.n_states
             action_dim = env.n_actions
         agent = AIRLAgent(
+            env=env,
             state_dim=state_dim,
             action_dim=action_dim,
             gamma=cfg['irl']['gamma'],
