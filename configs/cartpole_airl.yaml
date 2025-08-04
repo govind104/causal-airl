@@ -2,7 +2,7 @@ env:
   name: "CartPole"
   confounder_values: [0.5, 1.0]
   confounded: true
-  stochastic: false
+  stochastic: true
   state_representation: "continuous"
 
 expert:
@@ -14,18 +14,16 @@ irl:
   method: "airl"
   gamma: 0.99
   horizon: 200
-  max_iters: 50
+  max_iters: 500
   lr: 0.0003
-  latent_dim: 4
+  latent_dim: 3
   invariance_penalty: 0.2
   reward_input: "state_action"
   use_shaping: true
-  entropy_coef: 0.005            # Lower entropy to stabilize SAC policy
-  disc_steps_per_policy_step: 10 # Helps discriminator in high-dim setting
 
 train:
-  batch_size: 32
-  epochs: 1
+  batch_size: 128
+  epochs: 4
   seed: 42
   verbose: false
 
