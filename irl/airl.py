@@ -131,6 +131,20 @@ class AIRLDiscriminator(nn.Module):
             f = self.forward(s, a, s_prime if s_prime is not None else s)
             return f if log_pi is None else f - log_pi
 
+    def compute_reward(self, s, a=None):
+        """
+        Unified reward interface for attribution/visualisation.
+        If a is None: returns r(s)
+        Else: returns r(s,a)
+        """
+        s_enc = self.state_encoder(s)
+        if a is not None:
+            a_enc = self.action_encoder(a)
+            logits = self.r(torch.cat([s_enc, a_enc], dim=-1))
+        else:
+            logits = self.r(torch.cat([s_enc, torch.zeros(s_enc.shape[0], self.action_dim, device=s.device)], dim=-1))
+        return logits.squeeze()
+    
     def state_only_reward(self, s):
         """Extract state-only reward component r(s) for visualization"""
         with torch.no_grad():
@@ -322,7 +336,8 @@ class AIRLAgent:
         learned_reward = self.extract_reward(env)
         return learned_reward, self.logger.get_logs(), {
             'policy': self.policy,
-            'discriminator': self.discriminator
+            'discriminator': self.discriminator,
+            'state_encoder': self.state_encoder
         }
 
     def _prepare_expert_data(self, demos, env):
