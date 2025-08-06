@@ -126,6 +126,19 @@ class CausalDiscriminator(nn.Module):
 
         return full_reward.var(dim=0).mean()  # [batch_size, 1] → scalar
 
+    def compute_reward(self, s, a=None):
+        """
+        Unified reward interface for attribution and slicing.
+        Assumes self.state_encoder and self.reward_net exist.
+        """
+        if hasattr(self, "state_encoder"):
+            s = self.state_encoder(s)
+        if a is not None:
+            a = a if a.ndim == 2 else a.unsqueeze(-1)
+            input_tensor = torch.cat([s, a], dim=-1)
+            return self.r_causal(input_tensor).squeeze()
+        return self.r_invariant(s).squeeze()
+
 class CausalAIRLAgent:
     """Complete Causal AIRL agent with training and evaluation"""
     def __init__(
@@ -530,13 +543,18 @@ class CausalAIRLAgent:
             for z in env.confounder_values:
                 r_z, _, _ = self.extract_reward_components_for_z(env, z)
                 per_z_rewards.append(r_z)
+
+        reward_var_z = np.var(np.stack([r.flatten() for r in per_z_rewards], axis=0), axis=0).mean(
+                
         return learned_reward, self.logger.get_logs(), {
             'policy': self.policy,
             'discriminator': self.discriminator,
             'encoder': self.encoder,
             'invariant_reward': inv_reward,
             'causal_reward': causal_reward,
-            "per_z_rewards": per_z_rewards
+            "per_z_rewards": per_z_rewards,
+            "state_encoder": self.state_encoder,
+            "reward_var_z": float(reward_var_z)
         }
 
     def extract_reward_components(self, env) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
