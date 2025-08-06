@@ -1,0 +1,52 @@
+{
+  "env": {
+    "name": "GridWorld",
+    "grid_size": [
+      5,
+      5
+    ],
+    "reward_type": "sparse",
+    "reward_value": 1.0,
+    "slip_prob": 0.0,
+    "terminal_states": [
+      [
+        4,
+        4
+      ]
+    ],
+    "confounded": false,
+    "state_representation": "onehot"
+  },
+  "expert": {
+    "num_trajectories": 20,
+    "optimality": "optimal",
+    "confounder_value": 0
+  },
+  "irl": {
+    "method": "causal_airl",
+    "gamma": 0.99,
+    "horizon": 100,
+    "max_iters": 200,
+    "lr": 0.0003,
+    "latent_dim": 2,
+    "num_z_samples": 5,
+    "l1_bound": 1.0,
+    "invariance_penalty": 0.1,
+    "kl_weight_start": 0.1,
+    "kl_weight_end": 1.0,
+    "use_latent": true
+  },
+  "train": {
+    "batch_size": 64,
+    "epochs": 3,
+    "seed": 42,
+    "verbose": false
+  },
+  "eval": {
+    "test_z": null,
+    "plot": true,
+    "generalisation": false,
+    "save_dir": "results/gridworld_baselines/"
+  },
+  "git_commit": "1b054acd1bb4be275c223fdee62c71ed87a12eed"
+}

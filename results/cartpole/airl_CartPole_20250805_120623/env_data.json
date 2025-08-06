@@ -1,0 +1,6 @@
+{
+  "name": "CartPole",
+  "grid_size": null,
+  "terminal_states": null,
+  "true_reward": null
+}

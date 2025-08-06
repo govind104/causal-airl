@@ -27,7 +27,7 @@ venv.bak/
 *.swp
 
 # === Experiment outputs ===
-results/
+# results/
 logs/
 *.pdf
 *.png

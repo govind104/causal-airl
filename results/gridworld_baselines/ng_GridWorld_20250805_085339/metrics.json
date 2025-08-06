@@ -1,0 +1,17 @@
+{
+  "0": {
+    "success": true,
+    "status": "Optimization terminated successfully. (HiGHS Status 7: Optimal)"
+  },
+  "1": {
+    "reward_correlation": 0.0,
+    "value_difference": 1.7755911406144926,
+    "policy_agreement": 0.84,
+    "continuous": false
+  },
+  "2": {
+    "reward_mse": 0.008000000000000002,
+    "trajectory_overlap": 0.6296296296296297,
+    "reward_variance": null
+  }
+}
