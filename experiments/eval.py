@@ -1,7 +1,6 @@
 import numpy as np
 from scipy.stats import pearsonr
-from scipy.sparse import issparse, csr_matrix
-from envs.environments import BaseEnv
+from scipy.sparse import issparse
 from irl.maxent_irl import compute_policy_from_value
 
 
@@ -130,12 +129,3 @@ def compute_trajectory_overlap(expert_trajs, learned_trajs):
     intersection = expert_states & learned_states
     union = expert_states | learned_states
     return len(intersection) / len(union) if union else 0
-
-def compute_reward_variance(additional_data):
-    """Compute reward variance across Z values"""
-    if 'per_z_rewards' in additional_data and additional_data['per_z_rewards']:
-        reward_maps = additional_data['per_z_rewards']
-        min_len = min(r.shape[0] for r in reward_maps)
-        trimmed = np.stack([r[:min_len] for r in reward_maps])
-        return np.mean(np.var(trimmed, axis=0))
-    return 0  # Other methods don't have Z-dependent rewards
