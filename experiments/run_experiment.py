@@ -17,7 +17,7 @@ from irl.causal_airl import CausalAIRLAgent
 
 from envs.environments import BaseEnv, CartPoleWrapper, build_env
 from experiments.logger import TrainingLogger
-from experiments.eval import evaluate_irl_result, compute_trajectory_overlap, compute_reward_variance
+from experiments.eval import evaluate_irl_result, compute_trajectory_overlap
 
 def set_seed(seed):
     random.seed(seed)
@@ -85,6 +85,8 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
         cfg['git_commit'] = "unknown"
     
     # 1. Save configuration
+    if 'action_dim' in additional_data:
+        cfg['irl']['action_dim'] = additional_data['action_dim']
     with open(os.path.join(save_dir, 'config.json'), 'w') as f:
         json.dump(cfg, f, indent=2)
     
@@ -137,9 +139,8 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
         
         if method in ['airl', 'causal_airl']:
             # Save training logs
-            if 'training_logs' in additional_data:
-                with open(os.path.join(save_dir, 'training_logs.json'), 'w') as f:
-                    json.dump(additional_data['training_logs'], f, indent=2)
+            if 'training_logs' in additional_data and hasattr(additional_data['training_logs'], "save"):
+                additional_data['training_logs'].save(os.path.join(save_dir, 'training_logs.json'))
             
             # Save models
             if 'policy' in additional_data:
@@ -163,6 +164,10 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
     with open(os.path.join(save_dir, 'env_data.json'), 'w') as f:
         json.dump(env_data, f, indent=2)
 
+    # Save state encoder
+    if 'state_encoder' in additional_data:
+        torch.save(additional_data['state_encoder'].state_dict(), os.path.join(save_dir, 'state_encoder.pt'))
+
 def run_experiment(cfg):
     """Main experiment runner with unified IRL interface"""
     log_memory("On start")
@@ -181,6 +186,14 @@ def run_experiment(cfg):
         optimality=cfg['expert']['optimality'],
         z=cfg['expert'].get('confounder_value', None)
     )
+    # Save expert (s, a) pairs for attribution
+    expert_states, expert_actions = [], []
+    for traj in demos:
+        for (s, a, _, _) in traj:
+            expert_states.append(s)
+            expert_actions.append(a)
+    np.save(os.path.join(save_dir, 'states.npy'), np.array(expert_states, dtype=np.float32))
+    np.save(os.path.join(save_dir, 'actions.npy'), np.array(expert_actions, dtype=np.int64))
     log_memory("After Environment Building")
     
     # Dispatch to appropriate IRL method
@@ -236,6 +249,7 @@ def run_experiment(cfg):
             'reward': reward,
             'policy': agent.policy,
             'discriminator': agent.discriminator,
+            'action_dim': action_dim,
             **agent_data
         }
     elif method == 'causal_airl':
@@ -271,6 +285,7 @@ def run_experiment(cfg):
             'policy': agent.policy,
             'discriminator': agent.discriminator,
             'encoder': agent.encoder,
+            'action_dim': action_dim,
             **agent_data
         }
     else:
@@ -383,7 +398,7 @@ def run_experiment(cfg):
     
     # 3. Reward variance (only for causal_airl with confounder)
     if method == 'causal_airl' and 'causal_reward' in additional_data:
-        new_metrics["reward_variance"] = compute_reward_variance(additional_data)
+        new_metrics["reward_variance"] = additional_data.get("reward_var_z", None)
     else:
         new_metrics["reward_variance"] = None
     
