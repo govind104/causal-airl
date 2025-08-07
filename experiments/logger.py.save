@@ -1,0 +1,21 @@
+import os
+import json
+import csv
+import torch
+import numpy as np
+from typing import Dict, Any, Optional
+
+class TrainingLogger:
+    """Enhanced logger for per-iteration metrics"""
+    def __init__(self):
+        self.logs = {}
+
+
+
+    def get_logs(self):
+        return self.logs
+
+    def save(self, path: str):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(self.get_logs(), f, indent=2)
