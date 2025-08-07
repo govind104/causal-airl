@@ -164,10 +164,6 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
     with open(os.path.join(save_dir, 'env_data.json'), 'w') as f:
         json.dump(env_data, f, indent=2)
 
-    # Save state encoder
-    if 'state_encoder' in additional_data:
-        torch.save(additional_data['state_encoder'].state_dict(), os.path.join(save_dir, 'state_encoder.pt'))
-
 def run_experiment(cfg):
     """Main experiment runner with unified IRL interface"""
     log_memory("On start")

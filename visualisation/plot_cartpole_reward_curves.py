@@ -7,7 +7,7 @@ import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
 
-from irl.airl import AIRLDiscriminator, create_cartpole_encoder, create_onehot_encoder
+from irl.airl import AIRLDiscriminator, create_cartpole_encoder
 from irl.causal_airl import CausalAIRLDiscriminator
 
 
@@ -61,25 +61,29 @@ def compute_reward_map(run_dir, dims=(0, 2), resolution=100):
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Missing model_weights.pt in {run_dir}")
     checkpoint = torch.load(model_path, map_location="cpu")
+    with open(os.path.join(run_dir, "config.json")) as f:
+        cfg = json.load(f)
 
     results = {}
     X, Y, state_grid = generate_state_grid(dims, resolution)
-    method = None
 
-    if "encoder" in checkpoint:
-        # Causal AIRL
-        method = "causal"
-        state_encoder = create_cartpole_encoder()
-        state_encoder.load_state_dict(checkpoint["encoder"])
+    method = cfg["irl"]["method"]
+    irl_cfg = cfg.get("irl", {})
+    gamma = irl_cfg.get("gamma", 0.99)
+    latent_dim = irl_cfg.get("latent_dim", 2)
+    inv_penalty = irl_cfg.get("invariance_penalty", 0.0)
+    state_dim = cfg.get("state_dim", 4)
+    action_dim = cfg.get("action_dim", 2)
+
+    state_encoder = create_cartpole_encoder()
+    if method == "causal-airl":
         discriminator = CausalAIRLDiscriminator(
-            state_dim=4, action_dim=2, gamma=0.99, state_encoder=state_encoder
+            state_dim=state_dim, action_dim=action_dim, gamma=gamma, latent_dim=latent_dim, 
+            invariance_penalty=inv_penalty, state_encoder=state_encoder
         )
     else:
-        # Vanilla AIRL
-        method = "learned"
-        state_encoder = create_cartpole_encoder()
         discriminator = AIRLDiscriminator(
-            state_dim=4, action_dim=2, gamma=0.99, state_encoder=state_encoder
+            state_dim=state_dim, action_dim=action_dim, gamma=gamma, state_encoder=state_encoder
         )
 
     discriminator.load_state_dict(checkpoint["discriminator"])
@@ -103,5 +107,6 @@ if __name__ == "__main__":
         assert len(dims) == 2 and all(0 <= d < 4 for d in dims)
     except:
         raise ValueError("Invalid --dims argument. Must be two comma-separated integers in [0,1,2,3], e.g. 0,2")
+
     reward_maps, X, Y = compute_reward_map(args.run_dir, dims=dims)
     plot_cartpole_reward_maps(reward_maps, dims=dims, save_path=args.save_path, title_prefix=args.title)

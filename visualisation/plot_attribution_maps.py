@@ -6,7 +6,8 @@ import torch
 import torch.nn.functional as F
 import json
 
-from irl.airl import AIRLDiscriminator
+from irl.airl import AIRLDiscriminator, create_gridworld_encoder, create_cartpole_encoder
+from irl.causal_airl import CausalDiscriminator
 
 
 def load_states(states_path):
@@ -96,26 +97,13 @@ if __name__ == "__main__":
     action_dim = cfg.get("action_dim", 2)
     action_encoding = cfg.get("action_encoding", "onehot")
 
+    method = cfg["irl"]["method"]
     if state_encoding == "raw":
-        state_encoder = lambda x: x.float()
+        state_encoder = create_cartpole_encoder()
     elif state_encoding == "onehot":
-        grid_shape = load_env_shape(args.env_data)
-        grid_size = grid_shape[0]
-        def state_encoder(s):
-            if s.shape[1] == 1:
-                idx = s[:, 0].long()
-                row = idx // grid_size
-                col = idx % grid_size
-            elif s.shape[1] == 2:
-                row = s[:, 0].long()
-                col = s[:, 1].long()
-            else:
-                raise ValueError(f"Invalid state shape: {s.shape}")
-            flat = row * grid_size + col
-            return F.one_hot(flat, num_classes=grid_size**2).float()
+        state_encoder = create_gridworld_encoder()
     else:
         raise ValueError(f"Unsupported state_encoding: {state_encoding}")
-
 
     action_encoder = None
     if actions is not None:
@@ -126,11 +114,23 @@ if __name__ == "__main__":
             raise ValueError(f"Unsupported action_encoding: {action_encoding}")
 
     # Construct discriminator
-    discriminator = AIRLDiscriminator(
-        state_dim=states.shape[1],
-        action_dim=action_dim,
-        state_encoder=state_encoder
-    )
+    if method == "airl":
+        discriminator = AIRLDiscriminator(
+            state_dim=states.shape[1],
+            action_dim=action_dim,
+            state_encoder=state_encoder
+        )
+    else:
+        discriminator = CausalDiscriminator(
+            state_dim=states.shape[1],
+            action_dim=action_dim,
+            latent_dim=cfg.get("latent_dim", 2),
+            gamma=cfg.get("gamma", 0.99),
+            invariance_penalty=cfg.get("invariance_penalty", 0.1)
+        )
+        discriminator.state_encoder = state_encoder  # required for saliency
+        if action_encoder:
+            discriminator.action_encoder = action_encoder
     discriminator.load_state_dict(torch.load(args.model_path, map_location=device))
     discriminator = discriminator.to(device).eval()
 
