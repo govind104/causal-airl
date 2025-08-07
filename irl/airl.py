@@ -552,10 +552,12 @@ def create_gridworld_encoder(grid_size: int):
         return F.one_hot(flat, num_classes=grid_size**2).float()
     return encoder
 
+class CartpoleEncoder(nn.Module):
+    def forward(self, s: torch.Tensor): 
+        return s.float() # Ensure tensor is float32
+
 def create_cartpole_encoder():
-    def encoder(s: torch.Tensor):
-        return s.float()  # Ensure tensor is float32
-    return encoder
+    return CartpoleEncoder()
 
 def save_model(model: nn.Module, path: str):
     torch.save({
