@@ -4,7 +4,7 @@
 #$ -l gpu=1
 #$ -pe sharedmem 2
 #$ -l h_vmem=32G
-#$ -l h_rt=07:30:00
+#$ -l h_rt=22:30:00
 #$ -wd /exports/eddie/scratch/s2696869/causal-airl
 #$ -o logs/airl_experiments.out
 #$ -e logs/airl_experiments.err
