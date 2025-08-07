@@ -88,26 +88,9 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
     if 'action_dim' in additional_data:
         cfg['irl']['action_dim'] = additional_data['action_dim']
 
-    def sanitize_json(obj):
-        """Recursively convert numpy types to native Python types."""
-        if isinstance(obj, dict):
-            return {k: sanitize_json(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [sanitize_json(v) for v in obj]
-        elif isinstance(obj, np.integer):
-            return int(obj)
-        elif isinstance(obj, np.floating):
-            return float(obj)
-        elif isinstance(obj, np.ndarray) and obj.size == 1:
-            return float(obj.item())
-        else:
-            return obj
 
-    # Sanitize and save config
-    sanitized_cfg = sanitize_json(cfg)
-    with open(os.path.join(save_dir, 'config.json'), 'w') as f:
-        json.dump(sanitized_cfg, f, indent=2)
 
+    
     # 2. Save metrics
     metrics_to_save = metrics.get_logs() if hasattr(metrics, 'get_logs') else metrics
     with open(os.path.join(save_dir, 'metrics.json'), 'w') as f:
