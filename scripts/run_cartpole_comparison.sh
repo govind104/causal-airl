@@ -4,7 +4,7 @@
 #$ -l gpu=1
 #$ -pe sharedmem 2
 #$ -l h_vmem=32G
-#$ -l h_rt=01:00:00
+#$ -l h_rt=01:15:00
 #$ -wd /exports/eddie/scratch/s2696869/causal-airl
 #$ -o logs/cartpole_comparison.out
 #$ -e logs/cartpole_comparison.err

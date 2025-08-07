@@ -113,8 +113,9 @@ python -m visualisation.generate_summary_tables \
     --results_dir "results/airl_ablation/" \
     --groupby "method,n_trajectories" \
     --metrics "reward_corr,policy_agreement,value_difference" \
-    --out "results/figures/summary_table.tex" \
+    --out "results/tables/summary_table.tex" \
     --bold_best | tee -a $LOG
 
 echo "========== Figure Generation Complete ==========" | tee -a $LOG
 echo "Saved figures to results/figures/" | tee -a $LOG
+echo "Saved summary table to results/tables/" | tee -a $LOG

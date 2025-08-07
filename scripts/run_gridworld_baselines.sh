@@ -36,7 +36,7 @@ done
 
 # SCM Diagrams
 echo "========== [1] Generating SCM Diagrams ==========" | tee -a $LOG
-python -m visualisation.scm_diagram | tee -a $LOG
+python -m visualisation.plot_scm_diagram | tee -a $LOG
 
 # Core experiments
 echo "========== [2] Running Experiments ==========" | tee -a $LOG
