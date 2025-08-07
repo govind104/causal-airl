@@ -9,8 +9,12 @@ class TrainingLogger:
     def __init__(self):
         self.logs = {}
     
-    def log(self, key: str, value: float):
-        self.logs.setdefault(key, []).append(float(value))
+    def log(self, key_or_dict, value=None):
+        if isinstance(key_or_dict, dict):
+            for k, v in key_or_dict.items():
+                self.logs.setdefault(k, []).append(float(v))
+        else:
+            self.logs.setdefault(key_or_dict, []).append(float(value))
     
     def get_logs(self):
         return self.logs

@@ -28,7 +28,7 @@ echo "========== [Generate Figures] ==========" > $LOG
 
 echo "========== [1] SCM Diagrams ==========" | tee -a $LOG
 python -m visualisation.plot_scm_diagram \
-    --save_path "results/figures/scm_diagram.png" | tee -a $LOG
+    --save_path "results/figures/plot_scm_diagram.png" | tee -a $LOG
 
 echo "========== [2] GridWorld Reward Heatmaps ==========" | tee -a $LOG
 python -m visualisation.plot_rewards \
