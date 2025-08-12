@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -184,10 +185,9 @@ class CausalAIRLAgent:
             list(self.prior.parameters()),
             lr=lr
         )
-        self.optimizer_pi = torch.optim.Adam([
-            {'params': self.policy.parameters()},
-            {'params': self.value_net.parameters()}
-        ], lr=lr)
+        self.optimizer_pi = torch.optim.Adam(
+            self.policy.parameters(), lr=lr
+        )
         self.logger = TrainingLogger()
 
     def get_reward(self, s, a, s_prime, z=None):
@@ -248,55 +248,63 @@ class CausalAIRLAgent:
         if checkpoint['state_encoder'] and self.state_encoder:
             self.state_encoder.load_state_dict(checkpoint['state_encoder'])
 
-    def update_policy(self, states, actions, next_states, rewards, old_log_probs):
-        """PPO-style policy update with value network"""
-        # Compute TD targets
-        with torch.no_grad():
-            next_values = self.value_net(next_states).squeeze()
-        targets = rewards + self.gamma * next_values
-        values = self.value_net(states).squeeze(-1)
-
-        # Compute advantages
-        advantages = targets - values.detach()
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-
-        # Get current policy log probs
+    def update_policy(
+        self,
+        states: torch.Tensor,
+        actions: torch.Tensor,
+        rewards: torch.Tensor,
+        entropy_coef: float = 0.01,
+        grad_clip_norm: float = 0.5
+    ) -> float:
+        """REINFORCE policy update with baseline, advantage normalization, entropy regularization, and gradient clipping"""
+        self.policy.train()
         dist = self.policy(states)
-        log_probs = dist.log_prob(actions.squeeze())
+        log_probs = dist.log_prob(actions)
 
-        # PPO loss
-        ratios = torch.exp(log_probs - old_log_probs.detach())
-        clipped_ratios = torch.clamp(ratios, 1-0.2, 1+0.2)
-        policy_loss = -torch.min(ratios * advantages, clipped_ratios * advantages).mean()
+        # Baseline: per-batch mean of rewards
+        baseline = rewards.mean().detach()
+        advantages = rewards - baseline
 
-        assert values.shape == targets.shape, f"[PPO] Shape mismatch: {values.shape} vs {targets.shape}"
-        # Value loss
-        value_loss = F.mse_loss(values, targets)
+        # Advantage normalization with epsilon guard
+        adv_std = advantages.std(unbiased=False)
+        advantages = advantages / (adv_std + 1e-8)
+        advantages = advantages.detach()
 
         # Entropy bonus
         entropy = dist.entropy().mean()
-
-        total_loss = policy_loss + 0.5 * value_loss - 0.01 * entropy
-
+        loss = -(log_probs * advantages).mean() - entropy_coef * entropy
         self.optimizer_pi.zero_grad()
-        total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 0.5)
-        torch.nn.utils.clip_grad_norm_(self.value_net.parameters(), 0.5)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), grad_clip_norm)
         self.optimizer_pi.step()
 
-        return total_loss.item()
+        return loss.item()
 
     def update_causal_discriminator(
         self,
         expert_data: Tuple[torch.Tensor],
         agent_data: Tuple[torch.Tensor],
+        current_epoch: int = 0,
+        kl_coeff: float = 1e-2,
+        kl_warmup_epochs: int = 20,
+        kl_clamp_max: float = 10.0,
+        inv_coeff: float = 0.0,
+        num_z_samples: int = 5,
         beta_in: float = 1.0,
         batch_size: int = 64,
         epochs: int = 3,
-        num_z_samples: int = 5,
-        current_epoch: int = 0,
         total_epochs: int = 100
     ) -> Dict[str, float]:
+
+        # Outer-iteration-based linear KL warmup schedule
+        def compute_kl_coeff_eff(outer_iter: int, kl_coeff_target: float, warmup_outer_iters: int) -> float:
+            """Linear ramp from 0 to target over warmup_outer_iters (outer iterations)"""
+            progress = min(1.0, outer_iter / max(1, warmup_outer_iters))
+            return progress * kl_coeff_target
+
+        # Compute effective KL coefficient once per outer iteration
+        kl_coeff_eff = compute_kl_coeff_eff(current_epoch, kl_coeff, kl_warmup_epochs)
+
         # Unpack data
         s_e, a_e, s_prime_e = [x.to(self.device) for x in expert_data]
         s_pi, a_pi, s_prime_pi, log_pi_agent = [x.to(self.device) for x in agent_data]
@@ -319,62 +327,99 @@ class CausalAIRLAgent:
         dataset = TensorDataset(all_s, all_a, all_s_prime, all_log_pi, labels)
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
+        # Accumulate metrics across all inner epochs and batches
         total_loss = 0.0
         total_inv_loss = 0.0
-        total_kl = 0.0
+        total_kl_raw = 0.0
+        total_kl_post = 0.0
+        total_bce = 0.0
+        total_z_stats = {'z_mean': 0.0, 'z_std': 0.0, 'z_entropy_approx': 0.0}
+        batch_count = 0
 
         for epoch in range(epochs):
-            ep_loss = 0.0
-            ep_inv = 0.0
-            ep_kl = 0.0
-            ep_batches = 0
-
+            # ep_loss = 0.0
+            # ep_inv = 0.0
+            # ep_kl_raw = 0.0
+            # ep_kl_loss = 0.0
+            # ep_bce = 0.0
+            # ep_batches = 0
             for s, a, s_p, log_pi, y in loader:
-                s = s.detach()
-                a = a.detach()
-                s_p = s_p.detach()
-                log_pi = log_pi.detach()
-                y = y.detach()
+                # Detach agent tensors to avoid backprop into policy graph
+                s = s.detach().to(self.device)
+                a = a.detach().to(self.device)
+                s_p = s_p.detach().to(self.device)
+                log_pi = log_pi.detach().to(self.device)
+                y = y.detach().to(self.device)
 
-                batch_size = s.size(0)
-
-                # Generate multiple z samples
-                with torch.no_grad():
-                    a_enc_a = self.action_encoder(a)
-                    z_base, _, _ = self.encoder(s, a_enc_a)
-                    z_samples = z_base.unsqueeze(0) + torch.randn(
-                        num_z_samples, batch_size, self.encoder.latent_dim, device=self.device
-                    )
-
-                    # Compute invariance loss separately
-                    inv_loss = self.discriminator.invariance_loss(s, a_enc_a, s_p, z_samples)
-                    inv_loss_scalar = inv_loss.item()
+                # Single action encoding - reuse for all paths
+                a_enc = self.action_encoder(a)
 
                 # Encode latent
-                a_enc_kl = self.action_encoder(a)
-                z_kl, mu, std = self.encoder(s, a_enc_kl)
+                z_kl, mu, std = self.encoder(s, a_enc)
                 q_dist = Normal(mu, std)
-                p_dist = self.prior(batch_size)
-                kl = torch.clamp(kl_divergence(q_dist, p_dist).mean(), min=0, max=10)
+                p_dist = self.prior(mu.shape[0])
+                kl_raw = kl_divergence(q_dist, p_dist).mean()
+                kl_post = torch.clamp(kl_raw, min=0.0, max=kl_clamp_max) # Clamp bound is configurable via config (default 10.0)
+
+                # Compute explicit invariance loss (vectorized & detached z)
+                if inv_coeff > 0.0:
+                    # Sample z from q(z|s,a) using mu,std from KL path with reparameterization
+                    eps = torch.randn(num_z_samples, mu.shape[0], mu.shape[-1], device=self.device)
+                    z_samples = mu.unsqueeze(0) + std.unsqueeze(0) * eps  # [K, B, Z]
+                    z_samples_detached = z_samples.detach()  # STOP-GRAD through z for invariance loss
+
+                    # Expand inputs to match [K, B, ...]
+                    sK = s.unsqueeze(0).expand(num_z_samples, -1, -1)
+                    aK = a_enc.unsqueeze(0).expand(num_z_samples, -1, -1)
+                    spK = s_p.unsqueeze(0).expand(num_z_samples, -1, -1)
+
+                    # Compute rewards across z (vectorized)
+                    rK = []
+                    for k in range(num_z_samples):
+                        r_k, _ = self.discriminator.f(sK[k], aK[k], spK[k], z_samples_detached[k])
+                        rK.append(r_k)
+                    rK = torch.stack(rK, dim=0)  # [K, B, 1]
+
+                    # inv_var remains tensor and connected to discriminator/reward graph
+                    inv_var = rK.var(dim=0, unbiased=False).mean()
+                else:
+                    inv_var = torch.tensor(0.0, device=self.device)
+
+                # For logging only
+                inv_loss_val = inv_var.item() if inv_coeff > 0.0 else 0.0
+
+                # Collect z statistics for logging
+                with torch.no_grad():
+                    z_mean_batch = mu.mean().item()
+                    z_std_batch = std.mean().item()
+
+                    # Entropy approximation for diagonal Gaussian: 0.5 * log(2*pi*e * σ²)
+                    z_entropy_batch = (0.5 * torch.log(2 * torch.pi * math.e * std.pow(2))).mean().item()
+
+                    total_z_stats['z_mean'] += z_mean_batch
+                    total_z_stats['z_std'] += z_std_batch
+                    total_z_stats['z_entropy_approx'] += z_entropy_batch
 
                 # print(f"[DEBUG] z_base mean: {z_base.mean().item():.4f}, std: {z_base.std().item():.4f}")
                 # print(f"[DEBUG] z_samples std: {z_samples.std(dim=0).mean().item():.4f}")
                 # print(f"[DEBUG] mu mean: {mu.mean().item():.4f}, std mean: {std.mean().item():.4f}")
 
                 # Get discriminator outputs
-                a_enc_disc = self.action_encoder(a)
-                z_disc, _, _ = self.encoder(s, a_enc_disc)
-                f_out, _ = self.discriminator.f(s, a_enc_disc, s_p, z_disc)
+                z_disc, _, _ = self.encoder(s, a_enc)
+                f_out, _ = self.discriminator.f(s, a_enc, s_p, z_disc)
                 d_pred = self.discriminator.D(f_out, log_pi)
 
                 # Compute losses
-                disc_loss = F.binary_cross_entropy(d_pred, y)
+                disc_bce = F.binary_cross_entropy(d_pred, y)
 
                 # Combine losses
-                annealed_penalty = self.discriminator.invariance_penalty * (current_epoch / total_epochs)
+                # annealed_penalty = self.discriminator.invariance_penalty * (current_epoch / total_epochs)
+                # beta = 0.1 + 0.9 * min(beta_in, current_epoch / max(1, total_epochs / 2))
+                # loss = disc_loss + beta * kl + annealed_penalty * inv_loss_scalar - 1e-2 * mi_proxy
+
+                # Single invariance penalty: tensor inv_var stays in computational graph
                 mi_proxy = mu.pow(2).mean()
-                beta = 0.1 + 0.9 * min(beta_in, current_epoch / (total_epochs / 2))
-                loss = disc_loss + beta * kl + annealed_penalty * inv_loss_scalar - 1e-2 * mi_proxy # λ = 1e-2
+                loss = disc_bce + kl_coeff_eff * kl_post + inv_coeff * inv_var - 1e-3 * mi_proxy
                 loss_scalar = loss.item()
 
                 # print(f"[LOSS DEBUG] disc: {disc_loss.item():.4f} | kl: {kl.item():.4f} | inv: {inv_loss_scalar:.4f}")
@@ -385,35 +430,51 @@ class CausalAIRLAgent:
                 torch.nn.utils.clip_grad_norm_(self.discriminator.parameters(), 0.5)
                 torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 0.5)
                 self.optimizer_d.step()
-                # NOTE : inv_loss is detached; no gradients flow through z_samples.
-                # To optimize directly, remove .item() call and retain inv_loss in loss
 
-                # Log intermediate variables
-                ep_loss += loss.item()
-                ep_inv += inv_loss_scalar
-                ep_kl += kl.item()
-                ep_batches += 1
+                # Accumulate metrics across all batches
+                total_loss += loss.item()
+                total_inv_loss += inv_loss_val
+                total_kl_raw += kl_raw.item()
+                total_kl_post += kl_post.item()
+                total_bce += disc_bce.item()
+                batch_count += 1
 
-                # Explicitly delete intermediate tensors
-                del z_kl, mu, std, q_dist, p_dist, kl, z_disc, f_out, d_pred, disc_loss, loss
-                torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        # Average z statistics across all batches
+        if batch_count > 0:
+            for key in total_z_stats:
+                total_z_stats[key] /= batch_count
 
-            if ep_batches > 0:
-                self.logger.log({
-                    "epoch_kl": ep_kl / ep_batches,
-                    "epoch_inv_loss": ep_inv / ep_batches,
-                    "epoch_beta": beta
-                })
+        # Compute averages using actual batch count and log once per outer iteration
+        mean_disc_total_loss = total_loss / batch_count
+        mean_disc_bce = total_bce / batch_count
+        mean_kl_raw = total_kl_raw / batch_count
+        mean_kl_post = total_kl_post / batch_count
+        mean_inv_loss = total_inv_loss / batch_count
 
-            total_loss += ep_loss
-            total_inv_loss += ep_inv
-            total_kl += ep_kl
+        # Single logging call per outer iteration
+        self.logger.log({
+            "disc_total_loss": mean_disc_total_loss,
+            "epoch_kl_raw": mean_kl_raw,
+            "epoch_kl_post": mean_kl_post,
+            "kl_coeff_eff": kl_coeff_eff,
+            "epoch_inv_loss": mean_inv_loss,
+            "epoch_disc_bce": mean_disc_bce,
+            "z_mean": total_z_stats['z_mean'],
+            "z_std": total_z_stats['z_std'],
+            "z_entropy_approx": total_z_stats['z_entropy_approx'],
+        })
 
-        avg_loss = total_loss / len(loader)
+
         return {
-            "total_loss": avg_loss,
-            "invariance_loss": total_inv_loss / len(loader),
-            "kl_divergence": total_kl / len(loader)
+            "disc_total_loss": mean_disc_total_loss,
+            "disc_bce": mean_disc_bce,
+            "kl_raw": mean_kl_raw,
+            "kl_post": mean_kl_post,
+            "kl_coeff_eff": kl_coeff_eff,
+            "z_mean": total_z_stats['z_mean'],
+            "z_std": total_z_stats['z_std'],
+            "z_entropy_approx": total_z_stats['z_entropy_approx'],
+            "inv_loss": mean_inv_loss
         }
 
     def extract_reward_components_for_z(self, env, z_value):
@@ -503,6 +564,16 @@ class CausalAIRLAgent:
         """Full training loop for Causal AIRL"""
         # Prepare expert data
         s_e, a_e, s_pe = self._prepare_expert_data(demos)
+
+        # Read config parameters with defaults
+        kl_coeff = cfg.get('irl', {}).get('kl_coeff', 1e-2)
+        kl_warmup_epochs = cfg.get('irl', {}).get('kl_warmup_epochs', 20)
+        kl_clamp_max = cfg.get('irl', {}).get('kl_clamp_max', 10.0)
+        inv_coeff = cfg.get('irl', {}).get('inv_coeff', 0.0)
+        num_z_samples = cfg.get('irl', {}).get('num_z_samples', 5)
+        entropy_coef = cfg.get('irl', {}).get('entropy_coef', 0.01)
+
+        print(f"[CausalAIRL] Config: kl_coeff={kl_coeff}, kl_warmup_epochs={kl_warmup_epochs}, inv_coeff={inv_coeff}, num_z_samples={num_z_samples}, entropy_coef={entropy_coef}")
         
         # Training loop
         for it in range(cfg['irl']['max_iters']):
@@ -516,24 +587,37 @@ class CausalAIRLAgent:
             d_metrics = self.update_causal_discriminator(
                 (s_e, a_e, s_pe),
                 (s_pi, a_pi, s_ppi, log_pi),
+                current_epoch=it,
+                kl_coeff=kl_coeff,
+                kl_warmup_epochs=kl_warmup_epochs,
+                kl_clamp_max=kl_clamp_max,
+                inv_coeff=inv_coeff,
+                num_z_samples=num_z_samples,
                 beta_in=1.0,
                 batch_size=cfg['train']['batch_size'],
                 epochs=cfg['train']['epochs'],
-                num_z_samples=cfg['irl'].get('num_z_samples', 10),
-                current_epoch=it,
                 total_epochs=cfg['irl']['max_iters']
             )
-            self.logger.log(d_metrics)
             
             # Update policy with causal rewards
             with torch.no_grad():
                 a_enc = self.action_encoder(a_pi)
                 z, _, _ = self.encoder(s_pi, a_enc)
-                a_enc = self.action_encoder(a_pi)
                 rewards, _ = self.discriminator.f(s_pi, a_enc, s_ppi, z)
                 rewards = rewards.squeeze(-1)
-            
-            policy_loss = self.update_policy(s_pi, a_pi, s_ppi, rewards, log_pi)
+
+            # Log reward statistics
+            with torch.no_grad():
+                reward_stats = {
+                    "reward_min": rewards.min().item(),
+                    "reward_mean": rewards.mean().item(),
+                    "reward_max": rewards.max().item()
+                }
+            self.logger.log(reward_stats)
+
+            entropy_coef = cfg.get('irl', {}).get('entropy_coef', 0.01)
+            grad_clip_norm = cfg.get('irl', {}).get('grad_clip_norm', 0.5)
+            policy_loss = self.update_policy(s_pi, a_pi, rewards, entropy_coef, grad_clip_norm)
             self.logger.log({"policy_loss": policy_loss})
 
         # Extract reward components

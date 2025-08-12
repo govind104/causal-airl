@@ -212,19 +212,32 @@ class AIRLAgent:
         self,
         states: torch.Tensor,
         actions: torch.Tensor,
-        rewards: torch.Tensor
+        rewards: torch.Tensor,
+        entropy_coef: float = 0.01,
+        grad_clip_norm: float = 0.5
     ) -> float:
-        """REINFORCE policy update with entropy regularization"""
+        """REINFORCE policy update with baseline, advantage normalization, entropy regularization, and gradient clipping"""
         self.policy.train()
         dist = self.policy(states)
         log_probs = dist.log_prob(actions)
+
+        # Baseline: per-batch mean of rewards
+        baseline = rewards.mean().detach()
+        advantages = rewards - baseline
+
+        # Advantage normalization with epsilon guard
+        adv_std = advantages.std(unbiased=False)
+        advantages = advantages / (adv_std + 1e-8)
+        advantages = advantages.detach()
+
+        # Entropy bonus
         entropy = dist.entropy().mean()
-        
-        loss = -(log_probs * rewards).mean() - 0.01 * entropy
+        loss = -(log_probs * advantages).mean() - entropy_coef * entropy
         self.optimizer_pi.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 0.5)
+        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), grad_clip_norm)
         self.optimizer_pi.step()
+
         return loss.item()
 
     def extract_reward(self, env) -> np.ndarray:
@@ -328,8 +341,11 @@ class AIRLAgent:
             with torch.no_grad():
                 s_pi_encoded = self.state_encoder(s_pi)
                 rewards = self.discriminator.reward(s_pi, a_pi, s_ppi, log_pi).detach()
-            
-            policy_loss = self.update_policy(s_pi_encoded, a_pi.squeeze(), rewards)
+
+
+            entropy_coef = cfg.get('irl', {}).get('entropy_coef', 0.01)
+            grad_clip_norm = cfg.get('irl', {}).get('grad_clip_norm', 0.5)
+            policy_loss = self.update_policy(s_pi_encoded, a_pi.squeeze(), rewards, entropy_coef, grad_clip_norm)
             self.logger.log({"policy_loss": policy_loss})
         
         # Final evaluation
