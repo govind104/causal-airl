@@ -4,23 +4,45 @@ from scipy.sparse import issparse
 from irl.maxent_irl import compute_policy_from_value
 
 
-def reward_correlation(r_true: np.ndarray, r_learned: np.ndarray) -> float:
-    """Pearson correlation between ground-truth and learned reward."""
-    r_true_flat = r_true.flatten()
-    r_learned_flat = r_learned.flatten()
+def reward_correlation(r_true: np.ndarray, r_learned: np.ndarray, mask: np.ndarray) -> float:
+    """Pearson correlation between ground-truth and learned state-only reward.
 
-    if r_true_flat is None or r_learned_flat is None:
-        return -1.0  # Indicate missing data
+    Args:
+        r_true: Ground truth reward vector
+        r_learned: Learned state-only reward vector
+        mask: Boolean mask for non-terminal states
 
-    # Handle NaN/inf values
-    if np.any(np.isnan(r_true_flat)) or np.any(np.isnan(r_learned_flat)):
-        return 0.0
+    Returns:
+        Pearson correlation coefficient, or np.nan if computation fails
+    """
+    # Require mask, do not fall back to reward-based heuristics
+    if mask is None:
+        raise ValueError("Non-terminal mask is required for reward correlation computation.")
 
-    # Handle constant arrays
-    if np.all(r_true_flat == r_true_flat[0]) or np.all(r_learned_flat == r_learned_flat[0]):
-        return 0.0
-        
-    return pearsonr(r_true_flat, r_learned_flat)[0]
+    r_true_masked = r_true[mask]
+    r_learned_masked = r_learned[mask]
+
+    # Sparse-reward safe fallback: if the masked true rewards are constant (e.g., all zeros),
+    # compute correlation over ALL states to include the terminal "1" signal.
+    if np.std(r_true_masked) == 0:
+        print("[INFO] Zero variance in masked true rewards — using ALL states for correlation")
+        r_true_masked = r_true
+        r_learned_masked = r_learned
+
+    # Handle degenerate cases properly (after fallback)
+    if len(r_true_masked) == 0 or len(r_learned_masked) == 0:
+        print("[WARNING] Empty masked reward arrays - cannot compute correlation")
+        return np.nan
+
+    if np.any(np.isnan(r_true_masked)) or np.any(np.isnan(r_learned_masked)):
+        print("[WARNING] NaN detected in reward arrays - cannot compute correlation")
+        return np.nan
+
+    if np.std(r_true_masked) == 0 or np.std(r_learned_masked) == 0:
+        print("[WARNING] Zero variance in reward arrays - cannot compute correlation")
+        return np.nan
+
+    return pearsonr(r_true_masked, r_learned_masked)[0]
 
 def value_iteration(env, T, rewards, gamma=0.99, threshold=1e-6, max_iter=1000):
     n_states = T.shape[1]
@@ -81,11 +103,24 @@ def evaluate_irl_result(env, learned_reward, gamma, T=None):
         # Use precomputed T if available, else build
         if T is None:
             print("[Warning] Transition matrix T missing — rebuilding with default sparse=True.")
-            print(f"[DEBUG] env type: {type(env)}")
             T = env.build_transition_matrix()
             assert issparse(T), "Expected sparse transition matrix for GridWorld evaluation"
-        true_reward = env.get_ground_truth_reward().flatten()
-        learned_reward_flat = learned_reward.flatten()
+        true_reward = env.get_ground_truth_reward_vector()
+        if not hasattr(env, 'get_nonterminal_mask'):
+            raise AttributeError("Environment must implement get_nonterminal_mask() for evaluation")
+        nonterminal_mask = env.get_nonterminal_mask()
+        learned_reward_flat = np.asarray(learned_reward, dtype=float).reshape(-1)
+        true_reward = np.asarray(true_reward, dtype=float).reshape(-1)
+
+        # n_states consistency
+        assert len(true_reward) == len(nonterminal_mask) == env.n_states
+        # Transition matrix shape
+        assert T.shape == (env.n_states * env.n_actions, env.n_states)
+
+        # Sanity check lengths
+        if len(true_reward) != len(learned_reward_flat) or len(nonterminal_mask) != len(true_reward):
+            raise ValueError(f"Length mismatch in reward correlation inputs:\n"
+                             f"true_reward length {len(true_reward)}, learned_reward length {len(learned_reward_flat)}, mask length {len(nonterminal_mask)}")
         
         # Compute true value function and policy
         V_true = value_iteration(env, T, true_reward, gamma)
@@ -98,7 +133,7 @@ def evaluate_irl_result(env, learned_reward, gamma, T=None):
         pi_learned_actions = np.argmax(pi_learned, axis=1)
         
         results = {
-            "reward_correlation": reward_correlation(true_reward, learned_reward_flat),
+            "reward_correlation": reward_correlation(true_reward, learned_reward_flat, mask=nonterminal_mask),
             "value_difference": np.mean(np.abs(V_true - V_learned)),
             "policy_agreement": (pi_true_actions == pi_learned_actions).mean(),
             "continuous": False

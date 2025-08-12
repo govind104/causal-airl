@@ -38,6 +38,16 @@ def create_run_dir(base_path, cfg):
     env_name = cfg['env']['name']
     return f"{base_path}/{method}_{env_name}_{timestamp}"
 
+def _merge_logs_into_logger(logger: TrainingLogger, logs_dict: dict):
+    """
+    Safely merge a dict-of-lists (from agent.get_logs()) into a TrainingLogger,
+    preserving all per-iteration values.
+    """
+    for k, v in (logs_dict or {}).items():
+        if isinstance(v, list):
+            for val in v:
+                logger.log(k, val)
+
 def save_trajectories(policy, env, n_traj=10, z=None, torch_policy=True, device='cpu', state_encoder=None):
     """Save policy trajectories for visualization and analysis"""
     trajectories = []
@@ -73,6 +83,25 @@ def save_trajectories(policy, env, n_traj=10, z=None, torch_policy=True, device=
         trajectories.append(traj)
     return trajectories
 
+def _jsonify(obj):
+    """Convert non-JSON-serializable objects to JSON-serializable equivalents."""
+    if isinstance(obj, dict):
+        return {k: _jsonify(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_jsonify(v) for v in obj]
+    elif isinstance(obj, set):
+        return [_jsonify(v) for v in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif hasattr(obj, 'item') and callable(obj.item):  # numpy scalar
+        return obj.item()
+    else:
+        return obj
+
 def save_experiment_results(save_dir, cfg, metrics, additional_data):
     """Save all experiment results in structured format"""
     os.makedirs(save_dir, exist_ok=True)
@@ -106,7 +135,7 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
     # Sanitize and save config
     sanitized_cfg = sanitize_json(cfg)
     with open(os.path.join(save_dir, 'config.json'), 'w') as f:
-        json.dump(sanitized_cfg, f, indent=2)
+        json.dump(_jsonify(sanitized_cfg), f, indent=2)
 
     # 2. Save metrics
     metrics_to_save = metrics.get_logs() if hasattr(metrics, 'get_logs') else metrics
@@ -173,20 +202,21 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
     
     # 5. Environment data for visualization
     env = additional_data['env']
+    # Ensure terminal_states is serialized as list of lists
     env_data = {
         'name': env_name,
         'grid_size': env.grid_size if hasattr(env, 'grid_size') else None,
-        'terminal_states': env.terminal_states if hasattr(env, 'terminal_states') else None,
+        'terminal_states': list(env.terminal_states) if hasattr(env, 'terminal_states') else None,
         'true_reward': env.get_ground_truth_reward().tolist() if hasattr(env, 'get_ground_truth_reward') else None
     }
     with open(os.path.join(save_dir, 'env_data.json'), 'w') as f:
-        json.dump(env_data, f, indent=2)
+        json.dump(_jsonify(env_data), f, indent=2)
 
 def run_experiment(cfg):
     """Main experiment runner with unified IRL interface"""
     log_memory("On start")
     set_seed(cfg['train']['seed'])
-    
+
     save_dir = create_run_dir(cfg['eval']['save_dir'], cfg)
     os.makedirs(save_dir, exist_ok=True)
     
@@ -222,16 +252,16 @@ def run_experiment(cfg):
     if method == 'ng':
         result = run_ng_russell(cfg, env, demos)
         reward, metrics, additional_data = result
-        wrapped_metrics = TrainingLogger()
-        wrapped_metrics.log(metrics)
-        metrics = wrapped_metrics
+        metrics_logger = TrainingLogger()
+        _merge_logs_into_logger(metrics_logger, metrics)
+        metrics = metrics_logger
         if hasattr(env, 'n_states'): 
             assert reward.shape[0] == env.n_states, f"Reward shape mismatch: {reward.shape[0]} vs {env.n_states}"
     elif method == 'maxent':
         reward, metrics, additional_data = run_maxent_irl(cfg, env, demos)
-        wrapped_metrics = TrainingLogger()
-        wrapped_metrics.log(metrics)
-        metrics = wrapped_metrics
+        metrics_logger = TrainingLogger()
+        _merge_logs_into_logger(metrics_logger, metrics)
+        metrics = metrics_logger
         if hasattr(env, 'n_states'): 
             assert reward.shape[0] == env.n_states, f"Reward shape mismatch: {reward.shape[0]} vs {env.n_states}"
     elif method == 'airl':
@@ -254,12 +284,13 @@ def run_experiment(cfg):
         )
         reward, metrics, agent_data = agent.train(cfg, env, demos)
         print(f"[RUN] {method.upper()} reward shape: {reward.shape}, min={reward.min()}, max={reward.max()}")
-        wrapped_metrics = TrainingLogger()
-        wrapped_metrics.log(metrics)
-        metrics = wrapped_metrics
+        metrics_logger = TrainingLogger()
+        _merge_logs_into_logger(metrics_logger, metrics)
+        metrics = metrics_logger
         if hasattr(env, 'n_states'): 
             assert reward.shape[0] == env.n_states, f"Reward shape mismatch: {reward.shape[0]} vs {env.n_states}"
         additional_data = {
+            'training_logs': metrics,
             'reward': reward,
             'policy': agent.policy,
             'discriminator': agent.discriminator,
@@ -288,12 +319,13 @@ def run_experiment(cfg):
         )
         reward, metrics, agent_data = agent.train(cfg, env, demos)
         print(f"[RUN] {method.upper()} reward shape: {reward.shape}, min={reward.min()}, max={reward.max()}")
-        wrapped_metrics = TrainingLogger()
-        wrapped_metrics.log(metrics)
-        metrics = wrapped_metrics
+        metrics_logger = TrainingLogger()
+        _merge_logs_into_logger(metrics_logger, metrics)
+        metrics = metrics_logger
         if hasattr(env, 'n_states'): 
             assert reward.shape[0] == env.n_states, f"Reward shape mismatch: {reward.shape[0]} vs {env.n_states}"
         additional_data = {
+            'training_logs': metrics,
             'agent': agent,  # Store agent for later use
             'reward': reward,
             'policy': agent.policy,
@@ -314,10 +346,12 @@ def run_experiment(cfg):
     # Skip value iteration if requested
     if not cfg['eval'].get('skip_value_iteration', False):
         # Pass precomputed T if available
+        learned_state_reward = np.asarray(reward, dtype=float).reshape(-1)
+        print(f"[DEBUG] Learned reward vector shape: {learned_state_reward.shape}")
         T = additional_data.get('T', None)
         if T is not None:
             print(f"[{method.upper()}] Using {'sparse' if issparse(T) else 'dense'} transition matrix")
-        metrics.log(evaluate_irl_result(env, reward, cfg['irl']['gamma'], T=T))
+        metrics.log(evaluate_irl_result(env, learned_state_reward, cfg['irl']['gamma'], T=T))
     else:
         metrics.log({
             "reward_correlation": None,
