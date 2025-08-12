@@ -73,13 +73,14 @@ class GridWorld(BaseEnv):
         self.n_rows, self.n_cols = grid_size
         self.n_states = self.n_rows * self.n_cols
         self.terminal_states = terminal_states
+        self.terminal_states_set = set(tuple(t) for t in terminal_states)
         self.reward_type = reward_type
         self.reward_value = reward_value
         self.gamma = gamma
         self.slip_prob = slip_prob
         self._cached_T = None
         self._cached_T_sparse = None
-        for t in terminal_states:
+        for t in self.terminal_states_set:
             if not self.in_bounds(t):
                 raise ValueError(f"Terminal state {t} is out of bounds.")
 
@@ -103,7 +104,7 @@ class GridWorld(BaseEnv):
     def reset(self) -> Tuple[int, int]:
         while True:
             s = (np.random.randint(self.n_rows), np.random.randint(self.n_cols))
-            if s not in self.terminal_states:
+            if s not in self.terminal_states_set:
                 self.agent_pos = s
                 return s
 
@@ -116,13 +117,13 @@ class GridWorld(BaseEnv):
             next_pos = self.agent_pos
 
         reward = self.compute_reward(next_pos)
-        done = next_pos in self.terminal_states
+        done = next_pos in self.terminal_states_set
         self.agent_pos = next_pos
         return next_pos, reward, done, {}
 
     def compute_reward(self, pos: Tuple[int, int]) -> float:
         if self.reward_type == "sparse":
-            return float(self.reward_value) if pos in self.terminal_states else 0.0
+            return float(self.reward_value) if pos in self.terminal_states_set else 0.0
         elif self.reward_type == "shaped":
             goal = self.terminal_states[0]
             dist = np.linalg.norm(np.array(pos) - np.array(goal), ord=1)
@@ -139,7 +140,7 @@ class GridWorld(BaseEnv):
             for i in range(self.n_rows):
                 for j in range(self.n_cols):
                     s = (i, j)
-                    if s in self.terminal_states:
+                    if s in self.terminal_states_set:
                         continue
                     q_vals = []
                     for a in self.actions:
@@ -192,7 +193,7 @@ class GridWorld(BaseEnv):
     def render(self, mode="human"):
         grid = np.full((self.n_rows, self.n_cols), ".")
         for t in self.terminal_states:
-            grid[t] = "G"
+            grid[tuple(t)] = "G"
         r, c = self.agent_pos
         grid[r, c] = "A"
         print("\\n".join(" ".join(row) for row in grid))
@@ -204,6 +205,25 @@ class GridWorld(BaseEnv):
             for j in range(self.n_cols):
                 reward_map[i, j] = self.compute_reward((i, j))
         return reward_map
+
+    def get_state_list(self):
+        """Return canonical list of all states in row-major order."""
+        return [(i, j) for i in range(self.n_rows) for j in range(self.n_cols)]
+
+    def get_nonterminal_mask(self):
+        """Return boolean mask array: True for non-terminal states, derived from terminal_states."""
+        mask = []
+        for i in range(self.n_rows):
+            for j in range(self.n_cols):
+                mask.append((i, j) not in self.terminal_states_set)
+        return np.array(mask, dtype=bool)
+
+    def get_ground_truth_reward_vector(self):
+        """Return 1D reward vector matching get_state_list() order."""
+        reward_list = []
+        for state in self.get_state_list():
+            reward_list.append(self.compute_reward(state))
+        return np.array(reward_list, dtype=float)
 
     def get_optimal_policy(self) -> np.ndarray:
         """
@@ -257,7 +277,7 @@ class GridWorld(BaseEnv):
             for i in range(self.n_rows):
                 for j in range(self.n_cols):
                     s = self.state_to_index((i, j), self.n_cols)
-                    if (i, j) in self.terminal_states:
+                    if (i, j) in self.terminal_states_set:
                         for a in range(self.n_actions):
                             data.append(1.0)
                             rows.append(s * self.n_actions + a)
@@ -293,7 +313,7 @@ class GridWorld(BaseEnv):
             for i in range(self.n_rows):
                 for j in range(self.n_cols):
                     s = self.state_to_index((i, j), self.n_cols)
-                    if (i, j) in self.terminal_states:
+                    if (i, j) in self.terminal_states_set:
                         for a in range(self.n_actions):
                             T[s, a, s] = 1.0
                         continue
