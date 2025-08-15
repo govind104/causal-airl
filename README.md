@@ -68,6 +68,44 @@ To run multiple sweeps:
 python experiments/sweeps.py
 ```
 
+## Quick Reproduce (≤5 min)
+
+** Tiny AIRL (4x4):
+```bash
+python -m experiments.run_experiment \
+  --config configs/gridworld_tiny_airl.yaml \
+  --override irl.max_iters=60 \
+  --override train.epochs=5
+```
+
+** Tiny Causal-AIRL (Confounded 4x4):
+```bash
+python -m experiments.run_experiment \
+  --config configs/gridworld_tiny_causal_airl.yaml \
+  --override env.confounded=true \
+  --override irl.kl_coeff=0.003 \
+  --override irl.kl_warmup_epochs=20 \
+  --override irl.inv_coeff=0.02 \
+  --override irl.entropy_coef=0.005 \
+  --override irl.num_z_samples=5 \
+  --override irl.max_iters=60 \
+  --override train.epochs=5
+```
+
+** Parameter Sweeps:
+```bash
+python -m experiments.sweeps_airl \
+  --base configs/airl_ablation.yaml \
+  --save_root results/airl_ablate \
+  --grid irl.entropy_coef=0.0,0.005 \
+  --grid irl.grad_clip_norm=0.5,1.0
+  
+python -m experiments.sweeps_causal_airl \
+  --base configs/causal_airl_ablation.yaml \
+  --save_root results/causal_ablate \
+  --grid irl.kl_coeff=0.001,0.003,0.01 \
+  --grid irl.inv_coeff=0.0,0.02,0.05
+```
 
 
 ## 📊 Generating All Plots and Tables
