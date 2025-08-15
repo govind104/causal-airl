@@ -24,13 +24,18 @@ irl:
 
 train:
   batch_size: 64
+  epochs: 3
   seed: 42
   verbose: false
 
 eval:
   test_z: null
-  plot: true
+  plot: false
   generalisation: false
   save_dir: "results/gridworld_baselines/"
-  gen_trajectories: true      # Disable trajectory generation
-  skip_value_iteration: false   # Skip value iteration in evaluation
+  gen_trajectories: true
+  heldout_region: null
+  heldout_mask_indices: null
+  save_per_z: false
+  save_value_function: true
+  skip_value_iteration: false

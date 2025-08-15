@@ -17,24 +17,47 @@ irl:
   method: "causal_airl"
   gamma: 0.99
   horizon: 100
-  max_iters: 20
+  max_iters: 60
   lr: 0.0003
   l1_bound: 1.0
   latent_dim: 2
   num_z_samples: 5
   invariance_penalty: 0.1
-  kl_weight_start: 0.1        # β-annealing start
-  kl_weight_end: 1.0          # β-annealing max
+  kl_coeff: 0.003
+  kl_warmup_epochs: 20
+  kl_clamp_max: 10.0
+  entropy_coef: 0.005
+  grad_clip_norm: 0.5
+  inv_coeff: 0.02
+  q_warmstart:
+    enabled: false
+    epochs: 1
+    lr: null           # if null, reuse irl.lr
+    weight_decay: 0.0
+    num_trajs_per_z: 5
+    batch_size: null   # if null, reuse train.batch_size
+    z_num_classes: 2
+    pos_weight: null   # for binary; if null, compute N_neg/N_pos
+    class_weight: null # for multi-class; if null, inverse-frequency weights
+  reward_input: "state"
   use_latent: true            # Toggle causal mode
+  reward_logit_clip: null  # set to e.g. 10.0 to enable guard
+  device: null
 
 train:
   batch_size: 64
-  epochs: 3
+  epochs: 5
   seed: 42
   verbose: false
 
 eval:
   test_z: null
-  plot: true
+  plot: false
   generalisation: false
-  save_dir: "results/gridworld_baselines/"
+  save_dir: "results/tiny_causal_airl/"
+  gen_trajectories: true
+  heldout_region: null
+  heldout_mask_indices: null
+  save_per_z: true
+  save_value_function: true
+  skip_value_iteration: false

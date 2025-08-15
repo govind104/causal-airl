@@ -19,12 +19,14 @@ irl:
   gamma: 0.99
   horizon: 100
   max_iters: 300
-  lr: 0.01
-  latent_dim: 2
-  invariance_penalty: 0.1
-  entropy_coef: 0.01
-  disc_steps_per_policy_step: 5
-  reward_input: "state"
+  lr: 0.0003
+  entropy_coef: 0.005
+  l1_bound: 1.0
+  grad_clip_norm: 0.5
+  hidden_dim: 64        # AIRLDiscriminator hidden layer size
+  l2_reg: 1e-4         # L2 regularization for discriminator
+  reward_logit_clip: null
+  device: null
 
 train:
   batch_size: 64
@@ -38,3 +40,9 @@ eval:
   generalisation: true
   perturbations: true
   save_dir: "results/generalization/"
+  gen_trajectories: true
+  heldout_region: null
+  heldout_mask_indices: null
+  save_per_z: true
+  save_value_function: true
+  skip_value_iteration: false

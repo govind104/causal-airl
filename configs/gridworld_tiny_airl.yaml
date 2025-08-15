@@ -17,18 +17,30 @@ irl:
   method: "airl"
   gamma: 0.99
   horizon: 100
-  max_iters: 20
+  max_iters: 60
   lr: 0.0003
+  entropy_coef: 0.005
   l1_bound: 1.0
+  grad_clip_norm: 0.5
+  hidden_dim: 64        # AIRLDiscriminator hidden layer size
+  l2_reg: 1e-4         # L2 regularization for discriminator
+  reward_logit_clip: null
+  device: null
 
 train:
   batch_size: 64
-  epochs: 3
+  epochs: 5
   seed: 42
   verbose: false
 
 eval:
   test_z: null
-  plot: true
+  plot: false
   generalisation: false
-  save_dir: "results/gridworld_baselines/"
+  save_dir: "results/tiny_airl/"
+  gen_trajectories: true
+  heldout_region: null
+  heldout_mask_indices: null
+  save_per_z: true
+  save_value_function: true
+  skip_value_iteration: false

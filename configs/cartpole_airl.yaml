@@ -16,10 +16,13 @@ irl:
   horizon: 200
   max_iters: 500
   lr: 0.0003
-  latent_dim: 3
-  invariance_penalty: 0.2
-  reward_input: "state_action"
-  use_shaping: true
+  entropy_coef: 0.005
+  l1_bound: 1.0
+  grad_clip_norm: 0.5
+  hidden_dim: 64        # AIRLDiscriminator hidden layer size
+  l2_reg: 1e-4         # L2 regularization for discriminator
+  reward_logit_clip: null
+  device: null
 
 train:
   batch_size: 128
@@ -32,3 +35,9 @@ eval:
   plot: false
   generalisation: true
   save_dir: "results/cartpole/"
+  gen_trajectories: true
+  heldout_region: null
+  heldout_mask_indices: null
+  save_per_z: true
+  save_value_function: true
+  skip_value_iteration: false

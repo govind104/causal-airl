@@ -1,24 +1,23 @@
 env:
-  name: "ConfoundedGridWorld"
+  name: "GridWorld"
   grid_size: [5, 5]
   reward_type: "sparse"
   reward_value: 1.0
-  slip_prob: 0.1
+  slip_prob: 0.0
   terminal_states: [[4, 4]]
   confounded: true
-  confounder_value: 0
   state_representation: "onehot"
 
 expert:
   num_trajectories: 20
   optimality: "optimal"
-  confounder_value: 0  # Train on z=0
+  confounder_value: 1
 
 irl:
   method: "causal_airl"
   gamma: 0.99
   horizon: 100
-  max_iters: 200
+  max_iters: 60
   lr: 0.0003
   l1_bound: 1.0
   latent_dim: 2
@@ -47,15 +46,15 @@ irl:
 
 train:
   batch_size: 64
-  epochs: 3
+  epochs: 5
   seed: 42
   verbose: false
 
 eval:
   test_z: null
-  plot: true
-  generalisation: true
-  save_dir: "results/confounded/"
+  plot: false
+  generalisation: false
+  save_dir: "results/ablation_causal_airl/"
   gen_trajectories: true
   heldout_region: null
   heldout_mask_indices: null
