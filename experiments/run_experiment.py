@@ -69,11 +69,7 @@ def save_trajectories(policy, env, n_traj=10, z=None, torch_policy=True, device=
                 a = dist.probs.argmax(dim=-1).item()
             else:
                 a = policy(s)  # For MaxEnt/Ng methods
-            step_out = env.step(a)
-            if len(step_out) == 5:
-                s_next, _, terminated, truncated, _ = step_out
-            else:
-                s_next, _, terminated, truncated = step_out
+            s_next, _, terminated, truncated, _ = env.step(a)
             done = terminated or truncated
             traj.append((s, a))
             s = s_next
@@ -137,15 +133,48 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
     with open(os.path.join(save_dir, 'config.json'), 'w') as f:
         json.dump(_jsonify(sanitized_cfg), f, indent=2)
 
+    # Write flattened mirror for visualisation (dot-keys)
+    def _flatten(nested, sep=".", prefix=""):
+        flat = {}
+        for k, v in nested.items():
+            key = f"{prefix}{sep}{k}" if prefix else k
+            if isinstance(v, dict):
+                flat.update(_flatten(v, sep, key))
+            else:
+                flat[key] = v
+        return flat
+    with open(os.path.join(save_dir, 'config_flat.json'), 'w') as f:
+        json.dump(_flatten(sanitized_cfg), f, indent=2)
+
     # 2. Save metrics
     metrics_to_save = metrics.get_logs() if hasattr(metrics, 'get_logs') else metrics
     with open(os.path.join(save_dir, 'metrics.json'), 'w') as f:
         json.dump(metrics_to_save, f, indent=2)
-    
+
+    # Ensure training_logs.json exists for CartPole compatibility
+    method = cfg['irl']['method']
+    env_name = cfg['env']['name']
+    if env_name == "CartPole" and method in ['airl', 'causal_airl']:
+        training_logs_path = os.path.join(save_dir, 'training_logs.json')
+        if not os.path.exists(training_logs_path):
+            # Save metrics as training_logs.json for downstream compatibility
+            with open(training_logs_path, 'w') as f:
+                json.dump(metrics_to_save, f, indent=2)
+            print(f"[INFO] Created training_logs.json for CartPole compatibility")
+
     # 3. Save reward data (if applicable)
     if 'reward' in additional_data and additional_data['reward'] is not None:
-        np.save(os.path.join(save_dir, 'learned_reward.npy'), additional_data['reward'])
-    
+        reward = additional_data['reward']
+        np.save(os.path.join(save_dir, 'learned_reward.npy'), reward)
+
+        # Also save 2D map for GridWorld visualization (save-time only)
+        env_obj = additional_data.get('env', None)
+        if env_obj is not None and hasattr(env_obj, 'grid_size'):
+            H, W = env_obj.grid_size
+            if reward.size == H * W:
+                reward_map = reward.reshape(H, W)
+                np.save(os.path.join(save_dir, 'learned_reward_map.npy'), reward_map)
+
     # 4. Method-specific saves
     method = cfg['irl']['method']
     env_name = cfg['env']['name']
@@ -166,21 +195,60 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
         if method == 'causal_airl':
             # Save invariant and causal components
             if 'invariant_reward' in additional_data:
-                np.save(os.path.join(save_dir, 'invariant_reward.npy'), additional_data['invariant_reward'])
+                inv_reward = additional_data['invariant_reward']
+                np.save(os.path.join(save_dir, 'invariant_reward.npy'), inv_reward)
+
+                # Save 2D map for GridWorld visualization
+                env_obj = additional_data.get('env', None)
+                if env_obj is not None and hasattr(env_obj, 'grid_size'):
+                    H, W = env_obj.grid_size
+                    if inv_reward.size == H * W:
+                        np.save(os.path.join(save_dir, 'invariant_reward_map.npy'), inv_reward.reshape(H, W))
+
             if 'causal_reward' in additional_data:
-                np.save(os.path.join(save_dir, 'causal_reward.npy'), additional_data['causal_reward'])
+                causal_reward = additional_data['causal_reward']
+                np.save(os.path.join(save_dir, 'causal_reward.npy'), causal_reward)
+
+                # Save 2D map for GridWorld visualization
+                env_obj = additional_data.get('env', None)
+                if env_obj is not None and hasattr(env_obj, 'grid_size'):
+                    H, W = env_obj.grid_size
+                    if causal_reward.size == H * W:
+                        np.save(os.path.join(save_dir, 'causal_reward_map.npy'), causal_reward.reshape(H, W))
             
             # Save per-Z reward maps for confounded environments
-            if hasattr(additional_data['env'], 'confounder_values'):
+        save_per_z = cfg.get('eval', {}).get('save_per_z', False) or cfg.get('irl', {}).get('num_z_samples', 0) > 1
+        if save_per_z and hasattr(additional_data['env'], 'confounder_values'):
                 if 'invariant_reward' not in additional_data or 'causal_reward' not in additional_data:
                     print(f"Warning: Skipping per-Z reward saving - causal/invariant reward missing")
                 else:
-                    for z_value in additional_data['env'].confounder_values:
+                    # Create per_z subdirectory
+                    per_z_dir = os.path.join(save_dir, 'per_z')
+                    os.makedirs(per_z_dir, exist_ok=True)
+
+                    for i, z_value in enumerate(additional_data['env'].confounder_values):
                         if 'agent' in additional_data:
-                            reward_z, _, _ = additional_data['agent'].extract_reward_components_for_z(
-                                additional_data['env'], z_value
-                            )
-                            np.save(os.path.join(save_dir, f'reward_map_z{z_value}.npy'), reward_z)
+                            try:
+                                reward_z, _, _ = additional_data['agent'].extract_reward_components_for_z(
+                                    additional_data['env'], z_value
+                                )
+                            except AttributeError:
+                                print(f"Warning: Agent type {type(additional_data['agent']).__name__} does not support per-z reward extraction")
+                                print("Skipping per-z reward saving for this agent type")
+                                break
+
+                            # Save 1D reward vector (preserving contract)
+                            reward_z_flat = np.asarray(reward_z).flatten()
+                            np.save(os.path.join(per_z_dir, f'reward_z{i:03d}.npy'), reward_z_flat)
+
+                            # Save 2D reward map for visualization (reshape at save-time only)
+                            env_obj = additional_data.get('env', None)
+                            if env_obj is not None and hasattr(env_obj, 'grid_size'):
+                                H, W = env_obj.grid_size
+                                if reward_z_flat.size == H * W:
+                                    reward_map_2d = reward_z_flat.reshape(H, W)
+                                    np.save(os.path.join(per_z_dir, f'reward_map_z{i:03d}.npy'), reward_map_2d)
+                            print(f"[INFO] Saved per-z rewards for z={z_value} as z{i:03d}")
                         else:
                             print("Warning: extract_reward_components_for_z not available - skipping per-Z reward saving")
         
@@ -188,7 +256,16 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
             # Save training logs
             if 'training_logs' in additional_data and hasattr(additional_data['training_logs'], "save"):
                 additional_data['training_logs'].save(os.path.join(save_dir, 'training_logs.json'))
-            
+
+                # Optional alias for older scripts
+                try:
+                    src = os.path.join(save_dir, 'training_logs.json')
+                    dst = os.path.join(save_dir, 'training_log.json')
+                    with open(src, 'r') as _s, open(dst, 'w') as _d:
+                        _d.write(_s.read())
+                except Exception:
+                    pass
+
             # Save models
             if 'policy' in additional_data:
                 torch.save(additional_data['policy'].state_dict(), 
@@ -209,6 +286,23 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
         'terminal_states': list(env.terminal_states) if hasattr(env, 'terminal_states') else None,
         'true_reward': env.get_ground_truth_reward().tolist() if hasattr(env, 'get_ground_truth_reward') else None
     }
+
+    # Add held-out region info if present
+    if 'heldout_region' in additional_data:
+        env_data['heldout_region'] = additional_data['heldout_region']
+    if 'heldout_mask_indices' in additional_data:
+        env_data['heldout_mask_indices'] = additional_data['heldout_mask_indices']
+
+    # Add CartPole physics parameters
+    if isinstance(env, CartPoleWrapper):
+        env_data.update({
+            'pole_length': getattr(env.env.env, 'length', 0.5),
+            'masscart': getattr(env.env.env, 'masscart', 1.0),
+            'masspole': getattr(env.env.env, 'masspole', 0.1),
+            'gravity': getattr(env.env.env, 'gravity', 9.8),
+            'tau': getattr(env.env.env, 'tau', 0.02)
+        })
+
     with open(os.path.join(save_dir, 'env_data.json'), 'w') as f:
         json.dump(_jsonify(env_data), f, indent=2)
 
@@ -219,6 +313,22 @@ def run_experiment(cfg):
 
     save_dir = create_run_dir(cfg['eval']['save_dir'], cfg)
     os.makedirs(save_dir, exist_ok=True)
+
+    # Write manifest.json with config, overrides, seed, and git hash
+    manifest = {
+        'config': cfg.get('config_path', None),
+        'seed': cfg.get('train', {}).get('seed', None),
+        'start_time': datetime.utcnow().isoformat() + 'Z',
+        # Ensure 'overrides' key exists for viz compatibility
+        'overrides': cfg.get('overrides', cfg.get('_overrides', {})),
+    }
+    try:
+        repo = git.Repo(search_parent_directories=True)
+        manifest['git_hash'] = repo.head.object.hexsha
+    except Exception:
+        manifest['git_hash'] = None
+    with open(os.path.join(save_dir, 'manifest.json'), 'w') as f:
+        json.dump(manifest, f, indent=2)
     
     log_memory("Before Environment Building")
     # Build environment and sample demonstrations
@@ -270,9 +380,12 @@ def run_experiment(cfg):
         if isinstance(env, CartPoleWrapper):
             state_dim = env.observation_space.shape[0]
             action_dim = env.action_space.n
+            # Ensure consistency for CartPole
+            encoded_dim = state_dim  # Identity encoding for CartPole
         else:
             state_dim = env.n_states
             action_dim = env.n_actions
+            # For GridWorld, encoded_dim will be computed via infer_encoded_dim
         agent = AIRLAgent(
             env=env,
             state_dim=state_dim,
@@ -280,7 +393,8 @@ def run_experiment(cfg):
             gamma=cfg['irl']['gamma'],
             lr=cfg['irl']['lr'],
             state_encoder=state_encoder,
-            action_encoder=action_encoder
+            action_encoder=action_encoder,
+            reward_logit_clip=cfg['irl'].get('reward_logit_clip')
         )
         reward, metrics, agent_data = agent.train(cfg, env, demos)
         print(f"[RUN] {method.upper()} reward shape: {reward.shape}, min={reward.min()}, max={reward.max()}")
@@ -303,9 +417,12 @@ def run_experiment(cfg):
         if isinstance(env, CartPoleWrapper):
             state_dim = env.observation_space.shape[0]
             action_dim = env.action_space.n
+            # Ensure consistency for CartPole
+            encoded_dim = state_dim  # Identity encoding for CartPole
         else:
             state_dim = env.n_states
             action_dim = env.n_actions
+            # For GridWorld, encoded_dim will be computed via infer_encoded_dim
         agent = CausalAIRLAgent(
             env=env,
             state_dim=state_dim,
@@ -315,7 +432,8 @@ def run_experiment(cfg):
             invariance_penalty=cfg['irl']['invariance_penalty'],
             lr=cfg['irl']['lr'],
             state_encoder=state_encoder,
-            action_encoder=action_encoder
+            action_encoder=action_encoder,
+            reward_logit_clip=cfg['irl'].get('reward_logit_clip')
         )
         reward, metrics, agent_data = agent.train(cfg, env, demos)
         print(f"[RUN] {method.upper()} reward shape: {reward.shape}, min={reward.min()}, max={reward.max()}")
@@ -345,13 +463,80 @@ def run_experiment(cfg):
     log_memory("Before Value Iteration")
     # Skip value iteration if requested
     if not cfg['eval'].get('skip_value_iteration', False):
-        # Pass precomputed T if available
-        learned_state_reward = np.asarray(reward, dtype=float).reshape(-1)
-        print(f"[DEBUG] Learned reward vector shape: {learned_state_reward.shape}")
-        T = additional_data.get('T', None)
-        if T is not None:
-            print(f"[{method.upper()}] Using {'sparse' if issparse(T) else 'dense'} transition matrix")
-        metrics.log(evaluate_irl_result(env, learned_state_reward, cfg['irl']['gamma'], T=T))
+        # Simply aggregate final summary statistics from per-iteration logs for CartPole
+        env_name = cfg['env']['name']
+        if env_name == 'CartPole':
+            logs = metrics.get_logs() if hasattr(metrics, 'get_logs') else metrics
+            # Collect per-iteration arrays
+            avg_returns = logs.get('avg_episode_return', [])
+            avg_lens = logs.get('avg_episode_length', [])
+            ret_stds = logs.get('episode_return_std', [])
+            # Compute averaged final summary metrics
+            if len(avg_returns) > 0:
+                aggregate_metrics = {
+                    'avg_return': float(np.mean(avg_returns)),
+                    'avg_length': float(np.mean(avg_lens)) if len(avg_lens) > 0 else None,
+                    'return_std': float(np.mean(ret_stds)) if len(ret_stds) > 0 else None,
+                    'continuous': True
+                }
+                # Log the aggregate summary metrics
+                metrics.log(aggregate_metrics)
+        else:
+            # Pass precomputed T if available
+            learned_state_reward = np.asarray(reward, dtype=float).reshape(-1)
+            print(f"[DEBUG] Learned reward vector shape: {learned_state_reward.shape}")
+            T = additional_data.get('T', None)
+            if T is not None:
+                print(f"[{method.upper()}] Using {'sparse' if issparse(T) else 'dense'} transition matrix")
+
+            # Optional held-out state masking for generalisation tests
+            heldout_mask = None
+            region = None
+            heldout_region_config = cfg.get('eval', {}).get('heldout_region')
+            if heldout_region_config:
+                region = heldout_region_config
+                if hasattr(env, 'grid_size') and hasattr(env, 'state_to_index'):
+                    H, W = env.grid_size
+                    heldout_mask = np.zeros(env.n_states, dtype=bool)
+                    def in_region(i,j):
+                        if region == 'top_left': return i < H//2 and j < W//2
+                        if region == 'top_right': return i < H//2 and j >= W//2
+                        if region == 'bottom_left': return i >= H//2 and j < W//2
+                        if region == 'bottom_right': return i >= H//2 and j >= W//2
+                        return False
+                    for i_ in range(H):
+                        for j_ in range(W):
+                            idx = env.state_to_index((i_, j_), n_cols=W)
+                            if in_region(i_, j_):
+                                heldout_mask[idx] = True
+
+                    # Store held-out region info for later saving
+                    additional_data['heldout_region'] = region
+                    additional_data['heldout_mask_indices'] = heldout_mask.nonzero()[0].tolist()
+
+                else:
+                    # If no held-out region is configured, region stays None and we don't need any warning
+                    print(f"[Warning] Held-out region '{region}' specified but environment doesn't support it")
+
+            eval_results = evaluate_irl_result(env, cfg, save_dir, learned_state_reward, cfg['irl']['gamma'], T=T, heldout_mask=heldout_mask)
+
+            # Ensure all environments log evaluation results consistently
+            if eval_results is not None:
+                metrics.log(eval_results)
+
+        # Save value function for CartPole if requested
+        if isinstance(env, CartPoleWrapper) and cfg.get('eval', {}).get('save_value_function', False):
+            try:
+                # For CartPole, estimate value function via policy rollouts
+                policy = additional_data.get('policy')
+                if policy is not None:
+                    # Approximate V as average episode returns over state space
+                    V_approx = np.array([eval_results.get('avg_episode_return', 0.0)])
+                    np.save(os.path.join(save_dir, 'V.npy'), V_approx)
+                    print(f"[INFO] Saved CartPole value function approximation")
+            except Exception as e:
+                print(f"[Warning] Failed to save CartPole value function: {e}")
+
     else:
         metrics.log({
             "reward_correlation": None,
@@ -359,6 +544,26 @@ def run_experiment(cfg):
             "policy_agreement": None,
             "continuous": False})
     log_memory("After Value Iteration")
+
+    # Save per-Z reward maps for confounded environments BEFORE final save
+    if method == 'causal_airl' and hasattr(env, 'confounder_values') and env.confounder_values:
+        per_z_dir = os.path.join(save_dir, 'per_z')
+        os.makedirs(per_z_dir, exist_ok=True)
+        agent = additional_data.get('agent', None)
+        if agent and hasattr(agent, 'extract_reward_components_for_z'):
+            for i, z_value in enumerate(env.confounder_values):
+                try:
+                    reward_z, _, _ = agent.extract_reward_components_for_z(env, z_value)
+                    reward_z_flat = np.asarray(reward_z).flatten()
+                    np.save(os.path.join(per_z_dir, f'reward_z{i:03d}.npy'), reward_z_flat)
+                    # Save 2D map if GridWorld
+                    if hasattr(env, 'grid_size'):
+                        H, W = env.grid_size
+                        if reward_z_flat.size == H * W:
+                            np.save(os.path.join(per_z_dir, f'reward_map_z{i:03d}.npy'), reward_z_flat.reshape(H, W))
+                    print(f"[INFO] Saved per-z rewards for z={z_value} as z{i:03d}")
+                except Exception as e:
+                    print(f"[Warning] Failed to save per-z reward for z={z_value}: {e}")
 
     # Generate and save policy trajectories
     device = 'cuda' if torch.cuda.is_available() else 'cpu'

@@ -15,10 +15,20 @@ class TrainingLogger:
             if isinstance(val, (float, int)):
                 return float(val)
             if isinstance(val, torch.Tensor):
-                return float(val.item()) if val.numel() == 1 else None
+                if val.numel() == 1:
+                    return float(val.item())
+                else:
+                    # Convert multi-dimensional tensors to lists instead of dropping
+                    return val.detach().cpu().numpy().tolist()
             if isinstance(val, np.ndarray):
-                return float(val.item()) if val.size == 1 else None
-            return None  # unsupported types (e.g., lists, dicts, None)
+                if val.size == 1:
+                    return float(val.item())
+                else:
+                    # Convert multi-dimensional arrays to lists instead of dropping
+                    return val.tolist()
+            if isinstance(val, str):
+                return val  # Add string support
+            return None  # unsupported types
 
         if isinstance(key, dict):
             for k, v in key.items():
