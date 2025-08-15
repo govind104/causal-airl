@@ -50,12 +50,14 @@ class AIRLDiscriminator(nn.Module):
         hidden_dim: int = 64,
         state_encoder: Optional[Callable] = None,
         action_encoder: Optional[Callable] = None,
+        reward_logit_clip: Optional[float] = None,
         l2_reg: float = 1e-4
     ):
         super().__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.gamma = gamma
+        self.reward_logit_clip = reward_logit_clip
         self.l2_reg = l2_reg
 
         # Encoder functions for custom state/action representations
@@ -120,6 +122,10 @@ class AIRLDiscriminator(nn.Module):
     def D(self, s, a, s_prime, log_pi):
         """Discriminator output: P(expert|s,a,s')"""
         f = self.forward(s, a, s_prime)
+        # Rationale: Clipping f BEFORE sigmoid keeps σ(f) away from {0,1} to avoid BCE saturation + nans.
+        # ±10 is a safe default (σ(±10)≈{~0,~1} but finite). Leave None unless you actually see saturation in logs.
+        if self.reward_logit_clip is not None:
+            f = torch.clamp(f, min=-self.reward_logit_clip, max=self.reward_logit_clip)
         return torch.sigmoid(f - log_pi)
 
     def reward(self, s, a, s_prime=None, log_pi=None):
@@ -129,6 +135,9 @@ class AIRLDiscriminator(nn.Module):
         """
         with torch.no_grad():
             f = self.forward(s, a, s_prime if s_prime is not None else s)
+            # Same rationale as before; enable ±10 only when needed.
+            if self.reward_logit_clip is not None:
+                f = torch.clamp(f, min=-self.reward_logit_clip, max=self.reward_logit_clip)
             return f if log_pi is None else f - log_pi
 
     def compute_reward(self, s, a=None):
@@ -142,7 +151,9 @@ class AIRLDiscriminator(nn.Module):
             a_enc = self.action_encoder(a)
             logits = self.r(torch.cat([s_enc, a_enc], dim=-1))
         else:
-            logits = self.r(torch.cat([s_enc, torch.zeros(s_enc.shape[0], self.action_dim, device=s.device)], dim=-1))
+            zero_actions = torch.zeros(s_enc.shape[0], dtype=torch.long, device=s.device)
+            a_enc = self.action_encoder(zero_actions)
+            logits = self.r(torch.cat([s_enc, a_enc], dim=-1))
         return logits.squeeze()
     
     def state_only_reward(self, s):
@@ -183,10 +194,12 @@ class AIRLAgent:
         lr: float = 3e-4,
         device: torch.device = None,
         state_encoder = None,
-        action_encoder = None
+        action_encoder = None,
+        reward_logit_clip: Optional[float] = None,
     ):
         self.device = device or get_device()
         self.gamma = gamma
+        self.reward_logit_clip = reward_logit_clip
 
         self.state_encoder = state_encoder or (lambda x: x)
         self.action_encoder = action_encoder or (lambda x: x)
@@ -194,9 +207,10 @@ class AIRLAgent:
         self.discriminator = AIRLDiscriminator(
             state_dim, action_dim, gamma,
             state_encoder=self.state_encoder,
-            action_encoder=self.action_encoder
+            action_encoder=self.action_encoder,
+            reward_logit_clip=self.reward_logit_clip
         ).to(self.device)
-        
+
         encoded_dim = infer_encoded_dim(self.state_encoder, env)
         self.policy = PolicyNet(encoded_dim, action_dim).to(self.device)
         
@@ -249,9 +263,35 @@ class AIRLAgent:
         """
         self.discriminator.eval()
 
+        idxs = None
+        # Enumerate representative states for reward extraction
         if hasattr(env, 'get_all_states'):
             print("[AIRL] Using full GridWorld state enumeration.")
-            states_np = np.array(env.get_all_states(), dtype=np.float32)
+            raw_states = env.get_all_states()
+            # Convert (row, col) coords → flat indices to match training representation
+            if len(raw_states) > 0 and isinstance(raw_states[0], (tuple, list)) and len(raw_states[0]) == 2:
+                try:
+                    indices = [env.state_to_index(s) for s in raw_states]  # preferred signature
+                except TypeError:
+                    # fallback: pass n_cols if required by env
+                    if hasattr(env, "grid_size"):
+                        _, W = env.grid_size
+                        indices = [env.state_to_index(s, n_cols=W) for s in raw_states]
+                    else:
+                        indices = [env.state_to_index(s) for s in raw_states]
+                idxs = np.asarray(indices, dtype=np.int64)
+                # shape [n, 1] as expected by state encoder factories that take scalar index
+                states_np = idxs.reshape(-1, 1).astype(np.float32)
+            else:
+                # Already scalar indices or compatible representation
+                as_np = np.array(raw_states)
+                # If already scalar indices, record them for scattering
+                if as_np.ndim == 1:
+                    idxs = as_np.astype(np.int64)
+                    states_np = as_np.reshape(-1, 1).astype(np.float32)
+                else:
+                    # Fallback: unique rows (rare)
+                    states_np = as_np.astype(np.float32).reshape(-1, as_np.shape[-1])
 
         else:
             print("[AIRL] Using replay-based state sampling for reward extraction.")
@@ -271,11 +311,7 @@ class AIRLAgent:
                             dist = policy(s_encoded)
                             a = dist.sample().item()
                             step_out = env.step(a)
-                            if len(step_out) == 5:
-                                s, _, terminated, truncated, _ = step_out
-                            else:
-                                s, _, terminated, truncated = step_out
-
+                            s, _, terminated, truncated, _ = step_out
                             if terminated or truncated:
                                 break
                 return states
@@ -298,13 +334,127 @@ class AIRLAgent:
             print(f"[AIRL] Sampled {len(all_states)} raw states, "
                 f"{len(states_np)} unique valid states.")
 
+            # When we come from rollouts in GridWorld, convert to indices for scattering
+            if hasattr(env, "grid_size"):
+                _, W = env.grid_size
+                idxs = np.array([env.state_to_index(tuple(s.tolist()), n_cols=W) for s in states_np], dtype=np.int64)
+                states_np = idxs.reshape(-1, 1).astype(np.float32)
+
         states = torch.tensor(states_np, dtype=torch.float32, device=self.device)
         dummy_actions = torch.zeros(len(states), dtype=torch.long, device=self.device)  # Assumes discrete actions
 
         with torch.no_grad():
             rewards = self.discriminator.reward(states, dummy_actions, states)
 
-        return rewards.cpu().numpy()
+        rewards_np = rewards.squeeze(-1).detach().cpu().numpy()
+
+        # Canonicalize to a flat vector of length env.n_states in index order
+        if hasattr(env, "n_states") and idxs is not None:
+            out = np.zeros(int(env.n_states), dtype=rewards_np.dtype)
+            # If duplicates exist, last assignment wins (benign for identical states)
+            out[idxs] = rewards_np
+            return out
+        # Fallback: if we cannot form idxs, return as-is (should still pass CartPole)
+        return rewards_np
+
+    def extract_reward_components_for_z(self, env, z_value):
+        """
+        Extract reward components for a specific z value (compatibility method for confounded environments).
+        For standard AIRL, this returns the same reward regardless of z_value.
+
+        Returns: (total_reward, invariant_reward, causal_reward) where invariant=total, causal=zeros
+        """
+        print(f"[AIRLAgent] extract_reward_components_for_z called with z={z_value} (AIRL ignores z)")
+
+        # Get standard AIRL reward
+        total_reward = self.extract_reward(env)
+
+        # For AIRL, all reward is considered "invariant" and causal component is zero
+        invariant_reward = total_reward.copy()
+        causal_reward = np.zeros_like(total_reward)
+
+        return total_reward, invariant_reward, causal_reward
+
+    def update_discriminator(
+        self,
+        expert_data: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        agent_data: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+        batch_size: int = 64,
+        epochs: int = 3,
+        device: torch.device = None
+    ) -> Dict[str, float]:
+        """
+        Improved discriminator training with:
+        - Proper expert log_prob computation
+        - L2 regularization
+        - Memory-efficient batching
+
+        Args:
+            expert_data: (s, a, s_prime) tuples
+            agent_data: (s, a, s_prime, log_pi) tuples
+        """
+        if device is None:
+            device = self.device
+
+        s_e, a_e, s_prime_e = [x.to(device) for x in expert_data]
+        s_pi, a_pi, s_prime_pi, log_pi_agent = [x.to(device) for x in agent_data]
+
+        # Compute expert log probs using current policy
+        with torch.no_grad():
+            s_e_encoded = self.discriminator.state_encoder(s_e)
+            dist_e = self.policy(s_e_encoded)
+            log_pi_e = dist_e.log_prob(a_e).unsqueeze(1)  # (B,) -> (B,1)
+
+        # Create dataset
+        expert_labels = torch.ones(len(s_e), 1, device=device)
+        agent_labels = torch.zeros(len(s_pi), 1, device=device)
+
+        log_pi_e = log_pi_e.detach()
+        log_pi_agent = log_pi_agent.detach()
+
+        all_s = torch.cat([s_e, s_pi])
+        all_a = torch.cat([a_e, a_pi])
+        all_s_prime = torch.cat([s_prime_e, s_prime_pi])
+        all_log_pi = torch.cat([log_pi_e, log_pi_agent])
+        all_labels = torch.cat([expert_labels, agent_labels])
+
+        # Memory-efficient generator
+        def batch_generator():
+            perm = torch.randperm(len(all_s))
+            for i in range(0, len(perm), batch_size):
+                idx = perm[i:i+batch_size]
+                yield (all_s[idx], all_a[idx], all_s_prime[idx],
+                    all_log_pi[idx], all_labels[idx])
+
+        self.discriminator.train()
+        total_loss = 0.0
+        total_batches = 0
+
+        for _ in range(epochs):
+            for batch in batch_generator():
+                s_batch, a_batch, s_prime_batch, log_pi_batch, labels_batch = batch
+
+                # Compute discriminator output
+                d_pred = self.discriminator(s_batch, a_batch, s_prime_batch, log_pi_batch)
+
+                # Compute loss + L2 regularization
+                loss = F.binary_cross_entropy(d_pred, labels_batch)
+                loss += self.discriminator.l2_reg * self.discriminator._l2_penalty()
+
+                # Optimization step
+                self.optimizer_d.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.discriminator.parameters(), 1.0) # Gradient clipping
+                self.optimizer_d.step()
+                # Finite-loss guard (cfg-neutral; Fails fast if scales explode)
+                if not torch.isfinite(torch.tensor(loss.item())):
+                    raise RuntimeError("Non-finite discriminator loss (AIRL) — check reward/logit scaling")
+
+                total_loss += loss.item()
+                total_batches += 1
+
+        avg_loss = total_loss / total_batches if total_batches > 0 else float('nan')
+        return {"discriminator_loss": avg_loss}
 
     def train(
         self,
@@ -323,14 +473,17 @@ class AIRLAgent:
                 env, cfg['train']['batch_size']
             )
             s_pi, a_pi, s_ppi, log_pi = self._process_agent_data(agent_data)
-            
+
+            # Evaluate CartPole performance periodically
+            if hasattr(env, 'observation_space') and it % 10 == 0:
+                cartpole_metrics = self._evaluate_cartpole_performance(env)
+                self.logger.log(cartpole_metrics)
+                self.logger.log({"continuous": True})
+
             # Update discriminator
-            d_metrics = update_discriminator(
-                self.discriminator,
-                self.policy,
+            d_metrics = self.update_discriminator(
                 (s_e, a_e, s_pe),
                 (s_pi, a_pi, s_ppi, log_pi),
-                self.optimizer_d,
                 batch_size=cfg['train']['batch_size'],
                 epochs=cfg['train']['epochs'],
                 device=self.device
@@ -354,6 +507,44 @@ class AIRLAgent:
             'policy': self.policy,
             'discriminator': self.discriminator,
             'state_encoder': self.state_encoder
+        }
+
+    def _evaluate_cartpole_performance(self, env, num_episodes=10):
+        """Evaluate CartPole policy performance during training"""
+        if not hasattr(env, 'observation_space'):
+            return {}
+
+        episode_returns = []
+        episode_lengths = []
+
+        self.policy.eval()
+        for _ in range(num_episodes):
+            obs = env.reset()
+            if isinstance(obs, tuple):
+                obs = obs[0]
+
+            total_return = 0
+            steps = 0
+            done = False
+
+            while not done and steps < 500:
+                obs_tensor = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+                with torch.no_grad():
+                    dist = self.policy(obs_tensor)
+                    action = dist.sample().item()
+
+                obs, _, terminated, truncated, _ = env.step(action)
+                done = terminated or truncated
+                total_return += 1 if not done else 0
+                steps += 1
+
+            episode_returns.append(total_return)
+            episode_lengths.append(steps)
+
+        return {
+            "avg_episode_return": np.mean(episode_returns),
+            "avg_episode_length": np.mean(episode_lengths),
+            "episode_return_std": np.std(episode_returns)
         }
 
     def _prepare_expert_data(self, demos, env):
@@ -406,7 +597,8 @@ class AIRLAgent:
                     dist = self.policy(self.state_encoder(s_tensor))
                     a = dist.sample()
                     logp = dist.log_prob(a)
-                    s_next, _, done, _ = env.step(a.item())
+                    s_next, _, terminated, truncated, _ = env.step(a.item())
+                    done = terminated or truncated
                     s_next_index = env.state_to_index(s_next, n_cols=H)
                     s_next_tensor = torch.tensor([[s_next_index]], dtype=torch.float32, device=self.device)
                     data.append((s_tensor.squeeze(0), a.squeeze(), s_next_tensor.squeeze(0), logp.squeeze()))
@@ -428,7 +620,8 @@ class AIRLAgent:
                     dist = self.policy(s_tensor)
                     a = dist.sample()
                     logp = dist.log_prob(a)
-                    s_next, _, done, _ = env.step(a.item())
+                    s_next, _, terminated, truncated, _ = env.step(a.item())
+                    done = terminated or truncated
                     s_next_tensor = torch.tensor(s_next, dtype=torch.float32, device=self.device).unsqueeze(0)
                     data.append((s_tensor.squeeze(0), a.squeeze(), s_next_tensor.squeeze(0), logp.squeeze()))
                     s = s_next
@@ -458,85 +651,6 @@ def compute_airl_reward(
     if detach:
         f = f.detach()
     return f.to(device) - log_pi.to(device)
-
-
-def update_discriminator(
-    discriminator: AIRLDiscriminator,
-    policy: nn.Module,
-    expert_data: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
-    agent_data: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
-    optimizer: torch.optim.Optimizer,
-    batch_size: int = 64,
-    epochs: int = 3,
-    device: torch.device = get_device()
-) -> Dict[str, float]:
-    """
-    Improved discriminator training with:
-    - Proper expert log_prob computation
-    - L2 regularization
-    - Memory-efficient batching
-
-    Args:
-        policy: Current policy π(a|s) for computing expert log probs
-        expert_data: (s, a, s_prime) tuples
-        agent_data: (s, a, s_prime, log_pi) tuples
-    """
-    s_e, a_e, s_prime_e = [x.to(device) for x in expert_data]
-    s_pi, a_pi, s_prime_pi, log_pi_agent = [x.to(device) for x in agent_data]
-
-    # Compute expert log probs using current policy
-    with torch.no_grad():
-        s_e_encoded = discriminator.state_encoder(s_e)
-        dist_e = policy(s_e_encoded)
-        log_pi_e = dist_e.log_prob(a_e).unsqueeze(1)  # (B,) -> (B,1)
-
-    # Create dataset
-    expert_labels = torch.ones(len(s_e), 1, device=device)
-    agent_labels = torch.zeros(len(s_pi), 1, device=device)
-
-    log_pi_e = log_pi_e.detach()
-    log_pi_agent = log_pi_agent.detach()
-
-    all_s = torch.cat([s_e, s_pi])
-    all_a = torch.cat([a_e, a_pi])
-    all_s_prime = torch.cat([s_prime_e, s_prime_pi])
-    all_log_pi = torch.cat([log_pi_e, log_pi_agent])
-    all_labels = torch.cat([expert_labels, agent_labels])
-
-    # Memory-efficient generator
-    def batch_generator():
-        perm = torch.randperm(len(all_s))
-        for i in range(0, len(perm), batch_size):
-            idx = perm[i:i+batch_size]
-            yield (all_s[idx], all_a[idx], all_s_prime[idx],
-                   all_log_pi[idx], all_labels[idx])
-
-    discriminator.train()
-    total_loss = 0.0
-    total_batches = 0
-
-    for _ in range(epochs):
-        for batch in batch_generator():
-            s_batch, a_batch, s_prime_batch, log_pi_batch, labels_batch = batch
-
-            # Compute discriminator output
-            d_pred = discriminator(s_batch, a_batch, s_prime_batch, log_pi_batch)
-
-            # Compute loss + L2 regularization
-            loss = F.binary_cross_entropy(d_pred, labels_batch)
-            loss += discriminator.l2_reg * discriminator._l2_penalty()
-
-            # Optimization step
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(discriminator.parameters(), 1.0) # Gradient clipping
-            optimizer.step()
-
-            total_loss += loss.item()
-            total_batches += 1
-
-    avg_loss = total_loss / total_batches if total_batches > 0 else float('nan')
-    return {"discriminator_loss": avg_loss}
 
 # ========== OPTIMIZED ENCODERS ========== #
 
