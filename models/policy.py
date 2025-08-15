@@ -16,6 +16,9 @@ class PolicyNet(nn.Module):
         )
 
     def forward(self, state):
+        # Ensure input is properly shaped and float
+        if state.dtype != torch.float32:
+            state = state.float()
         logits = self.net(state)
         dist = D.Categorical(logits=logits)
         return dist
