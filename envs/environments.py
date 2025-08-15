@@ -508,8 +508,7 @@ class CartPoleWrapper(BaseEnv):
 
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, Dict]:
         next_obs, reward, terminated, truncated, info = self.env.step(action)
-        done = terminated or truncated
-        return next_obs, reward, done, info
+        return next_obs, reward, terminated, truncated, info
 
     def set_confounder(self, z: float):
         """
@@ -550,7 +549,8 @@ class CartPoleWrapper(BaseEnv):
             steps = 0
             while not done and steps < H_max:
                 a = self.expert_policy(obs, mode=optimality)
-                next_obs, r, done, _ = self.step(a)
+                next_obs, r, terminated, truncated, _ = self.step(a)
+                done = terminated or truncated
                 traj.append((obs, a, r, next_obs))
                 obs = next_obs
                 steps += 1
