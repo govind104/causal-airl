@@ -6,9 +6,10 @@ import torch
 import random
 import gc
 import json
-import git
+import glob
+
 from datetime import datetime
-from scipy.sparse import issparse
+from scipy.sparse import issparse, save_npz
 
 from irl.ng_russell import run_ng_russell, log_memory
 from irl.maxent_irl import run_maxent_irl, soft_value_iteration, compute_policy_from_value
@@ -18,6 +19,7 @@ from irl.causal_airl import CausalAIRLAgent
 from envs.environments import BaseEnv, CartPoleWrapper, build_env
 from experiments.logger import TrainingLogger
 from experiments.eval import evaluate_irl_result, compute_trajectory_overlap
+
 
 def set_seed(seed):
     random.seed(seed)
@@ -48,35 +50,120 @@ def _merge_logs_into_logger(logger: TrainingLogger, logs_dict: dict):
             for val in v:
                 logger.log(k, val)
 
-def save_trajectories(policy, env, n_traj=10, z=None, torch_policy=True, device='cpu', state_encoder=None):
-    """Save policy trajectories for visualization and analysis"""
+def _compute_state_reward_from_airl(discriminator, state_encoder, env):
+    """
+    Derive a *state-only* reward vector from AIRL by averaging r(s,a) over actions.
+    This strips the potential term h, making it suitable for correlation
+    with ground-truth *state* rewards. Returns np.ndarray of shape (n_states,).
+    """
+    discriminator.eval()
+    # Enumerate all states as flat indices → one-hot via provided encoder
+    idxs = np.arange(env.n_states, dtype=np.int64)
+    states_idx = torch.tensor(idxs.reshape(-1, 1), dtype=torch.float32)
+    with torch.no_grad():
+        s_enc = state_encoder(states_idx)                              # [S, dimS]
+        actions = torch.arange(env.n_actions, dtype=torch.long)
+        a_onehot = torch.nn.functional.one_hot(actions, num_classes=env.n_actions).float()  # [A, dimA]
+        s_rep = s_enc.unsqueeze(1).repeat(1, env.n_actions, 1)         # [S, A, dimS]
+        a_rep = a_onehot.unsqueeze(0).repeat(env.n_states, 1, 1)       # [S, A, dimA]
+        sa = torch.cat([s_rep, a_rep], dim=-1)                         # [S, A, dimS+dimA]
+        r_sa = discriminator.r(sa).squeeze(-1)                         # [S, A]
+        r_state = r_sa.mean(dim=1)                                     # [S]
+    return r_state.cpu().numpy()
+
+def _infer_eval_max_steps(env, cfg):
+    """Infer a sensible eval horizon.
+    Priority:
+      1) cfg['eval']['max_steps'] if provided
+      2) GridWorld-style heuristic (slip-aware, grid-size dependent)
+      3) Gym env cap if available (env._max_episode_steps or spec.max_episode_steps)
+      4) Fallback 1000
+    """
+    # 1) Explicit override
+    try:
+        ms = int(cfg.get('eval', {}).get('max_steps', 0))
+        if ms > 0:
+            return ms
+    except Exception:
+        pass
+    # 2) GridWorld heuristic (mirrors environments.py)
+    try:
+        if hasattr(env, 'grid_size') and hasattr(env, 'slip_prob'):
+            H, W = env.grid_size
+            min_path = (W - 1) + (H - 1)
+            slowdown = 1.0 / max(1.0 - float(getattr(env, 'slip_prob', 0.0)), 1e-6)
+            H_cap = max(100, int(W) * int(H))
+            return int(min(slowdown * (min_path + (W + H) + 10), H_cap))
+    except Exception:
+        pass
+    # 3) Gym caps
+    try:
+        if hasattr(env, '_max_episode_steps') and env._max_episode_steps:
+            return int(env._max_episode_steps)
+    except Exception:
+        pass
+    try:
+        if hasattr(env, 'spec') and env.spec and getattr(env.spec, 'max_episode_steps', None):
+            return int(env.spec.max_episode_steps)
+    except Exception:
+        pass
+    # 4) Fallback
+    return 1000
+
+def save_trajectories(policy, env, n_traj=10, z=None, torch_policy=True, device='cpu', state_encoder=None, max_steps: int = 1000):
+    """Save policy trajectories for visualization and analysis.
+    Args:
+        policy: torch policy (when torch_policy=True) or callable mapping s->a
+        env: environment
+        n_traj: number of episodes to generate
+        z: optional confounder value to set on the env
+        torch_policy: whether 'policy' is a torch module returning a dist
+        device: torch device
+        state_encoder: encoder used before passing state to policy (torch path)
+        max_steps: hard cap on per-episode steps (was 1000; now configurable)
+    """
     trajectories = []
     for _ in range(n_traj):
-        if z is not None and hasattr(env, 'confounder_values'):
-            env.z = z
         s_raw = env.reset()
+        if z is not None:
+            if hasattr(env, 'set_confounder'):
+                env.set_confounder(z)           # CartPole
+            elif hasattr(env, 'z'):
+                env.z = z                       # ConfoundedGridWorld
+
         s = s_raw[0] if isinstance(s_raw, tuple) else s_raw
         traj = []
         done = False
-        while not done and len(traj) < 1000:  # Prevent infinite loops
+        steps = 0
+        while not done and steps < max_steps:
             if torch_policy:
                 if isinstance(s, (int, np.integer)):
                     s_tensor = torch.tensor([[s]], dtype=torch.float32, device=device)
                 else:
                     s_tensor = torch.FloatTensor(s).unsqueeze(0).to(device)
                 s_encoded = state_encoder(s_tensor)
-                dist = policy(s_encoded)
+                # inference path: avoid tracking grads during evaluation/trajectory saving
+                with torch.no_grad():
+                    dist = policy(s_encoded)
                 a = dist.probs.argmax(dim=-1).item()
             else:
                 a = policy(s)  # For MaxEnt/Ng methods
-            s_next, _, terminated, truncated, _ = env.step(a)
-            done = terminated or truncated
+            step_out = env.step(a)
+            # Gymnasium-style (5-tuple): (obs, reward, terminated, truncated, info)
+            if isinstance(step_out, tuple) and len(step_out) == 5:
+                s_next, _, terminated, truncated, _ = step_out
+                done = terminated or truncated
+            else:
+                # Tabular GridWorld (4-tuple): (state, reward, done, info)
+                s_next, _, done, _ = step_out
             traj.append((s, a))
             s = s_next
+            steps += 1
             if done:
                 traj.append((s_next, None))
                 break
         trajectories.append(traj)
+
     return trajectories
 
 def _jsonify(obj):
@@ -102,13 +189,10 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
     """Save all experiment results in structured format"""
     os.makedirs(save_dir, exist_ok=True)
     
-    # Add git commit hash for reproducibility
-    try:
-        repo = git.Repo(search_parent_directories=True)
-        cfg['git_commit'] = repo.head.object.hexsha
-    except:
-        cfg['git_commit'] = "unknown"
-    
+    # Ensure we always have a logger-like object
+    if metrics is None:
+        metrics = TrainingLogger()
+
     # 1. Save configuration
     if 'action_dim' in additional_data:
         cfg['irl']['action_dim'] = additional_data['action_dim']
@@ -216,7 +300,7 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
                     if causal_reward.size == H * W:
                         np.save(os.path.join(save_dir, 'causal_reward_map.npy'), causal_reward.reshape(H, W))
             
-            # Save per-Z reward maps for confounded environments
+        # Save per-Z reward maps for confounded environments
         save_per_z = cfg.get('eval', {}).get('save_per_z', False) or cfg.get('irl', {}).get('num_z_samples', 0) > 1
         if save_per_z and hasattr(additional_data['env'], 'confounder_values'):
                 if 'invariant_reward' not in additional_data or 'causal_reward' not in additional_data:
@@ -313,33 +397,75 @@ def run_experiment(cfg):
 
     save_dir = create_run_dir(cfg['eval']['save_dir'], cfg)
     os.makedirs(save_dir, exist_ok=True)
-
-    # Write manifest.json with config, overrides, seed, and git hash
-    manifest = {
-        'config': cfg.get('config_path', None),
-        'seed': cfg.get('train', {}).get('seed', None),
-        'start_time': datetime.utcnow().isoformat() + 'Z',
-        # Ensure 'overrides' key exists for viz compatibility
-        'overrides': cfg.get('overrides', cfg.get('_overrides', {})),
-    }
-    try:
-        repo = git.Repo(search_parent_directories=True)
-        manifest['git_hash'] = repo.head.object.hexsha
-    except Exception:
-        manifest['git_hash'] = None
-    with open(os.path.join(save_dir, 'manifest.json'), 'w') as f:
-        json.dump(manifest, f, indent=2)
     
     log_memory("Before Environment Building")
+
     # Build environment and sample demonstrations
     env = build_env(cfg)
+
+    # Create logger up front
+    metrics = TrainingLogger()
+
+    # Apply held-out region filtering to training data
+    heldout_region = cfg.get('eval', {}).get('heldout_region')
+    training_heldout_mask = None
+    if heldout_region and hasattr(env, 'grid_size') and hasattr(env, 'state_to_index'):
+        H, W = env.grid_size
+        training_heldout_mask = np.zeros(env.n_states, dtype=bool)
+
+        def in_region(i,j):
+            if heldout_region == 'top_left': return i < H//2 and j < W//2
+            if heldout_region == 'top_right': return i < H//2 and j >= W//2
+            if heldout_region == 'bottom_left': return i >= H//2 and j < W//2
+            if heldout_region == 'bottom_right': return i >= H//2 and j >= W//2
+            return False
+
+        for i_ in range(H):
+            for j_ in range(W):
+                idx = env.state_to_index((i_, j_), n_cols=W)
+                if in_region(i_, j_):
+                    training_heldout_mask[idx] = True
+
     if hasattr(env, "reset_transition_cache"):
         env.reset_transition_cache()
-    demos = env.sample_expert_trajectories(
+
+    demos_raw = env.sample_expert_trajectories(
         n_trajectories=cfg['expert']['num_trajectories'],
         optimality=cfg['expert']['optimality'],
         z=cfg['expert'].get('confounder_value', None)
     )
+
+    # Filter training demos to exclude held-out region
+    if training_heldout_mask is not None:
+        demos = []
+        dropped_samples = 0
+        for traj in demos_raw:
+            filtered_traj = []
+            for (s, a, r, s_p) in traj:
+                idx = env.state_to_index(s, n_cols=W)
+                if not training_heldout_mask[idx]:
+                    filtered_traj.append((s, a, r, s_p))
+                else:
+                    dropped_samples += 1
+            if filtered_traj:
+                demos.append(filtered_traj)
+        print(f"[Info] Filtered {dropped_samples} samples from held-out region '{heldout_region}'")
+    else:
+        demos = demos_raw
+
+    # = Sample-efficiency bookkeeping (log planned subset sizes) =
+    try:
+        n = len(demos)
+        demo_counts = sorted(set([max(1, n//4), max(1, n//2), max(1, 3*n//4), n]))
+        metrics.log({f"demo_count_{k}": k for k in demo_counts})
+    except Exception as _e:
+        print(f"[WARN] demo-count logging failed: {_e}")
+
+    # Handle test_z for cross-confounder evaluation
+    test_z = cfg['eval'].get('test_z', None)
+    if test_z is not None and hasattr(env, 'confounder_values'):
+        print(f"[Info] Using test_z={test_z} for evaluation (trained on different confounder)")
+
     # Save expert (s, a) pairs for attribution
     expert_states, expert_actions = [], []
     for traj in demos:
@@ -348,6 +474,7 @@ def run_experiment(cfg):
             expert_actions.append(a)
     np.save(os.path.join(save_dir, 'states.npy'), np.array(expert_states, dtype=np.float32))
     np.save(os.path.join(save_dir, 'actions.npy'), np.array(expert_actions, dtype=np.int64))
+
     log_memory("After Environment Building")
     
     # Dispatch to appropriate IRL method
@@ -359,23 +486,30 @@ def run_experiment(cfg):
         print("[Warning] MaxEnt with dense T on large grid may cause memory issues.")
 
     log_memory("Before Experiments")
+
+    # Baseline floor metrics (namespaced)
+    baselines = {}
+    if hasattr(env, 'n_actions'):
+        baselines['baselines/random_policy_agreement'] = 1.0/float(env.n_actions)
+    if hasattr(env, 'get_ground_truth_reward') and hasattr(env, 'n_states'):
+        gt = env.get_ground_truth_reward().ravel()
+        rnd = np.random.randn(env.n_states)
+        baselines['baselines/random_reward_corr'] = float(np.corrcoef(gt, rnd)[0,1])
+    metrics.log(baselines)
+
     if method == 'ng':
         result = run_ng_russell(cfg, env, demos)
-        reward, metrics, additional_data = result
-        metrics_logger = TrainingLogger()
-        _merge_logs_into_logger(metrics_logger, metrics)
-        metrics = metrics_logger
+        reward, new_metrics, additional_data = result
+        _merge_logs_into_logger(metrics, new_metrics)
         if hasattr(env, 'n_states'): 
             assert reward.shape[0] == env.n_states, f"Reward shape mismatch: {reward.shape[0]} vs {env.n_states}"
     elif method == 'maxent':
-        reward, metrics, additional_data = run_maxent_irl(cfg, env, demos)
-        metrics_logger = TrainingLogger()
-        _merge_logs_into_logger(metrics_logger, metrics)
-        metrics = metrics_logger
+        reward, new_metrics, additional_data = run_maxent_irl(cfg, env, demos)
+        _merge_logs_into_logger(metrics, new_metrics)
         if hasattr(env, 'n_states'): 
             assert reward.shape[0] == env.n_states, f"Reward shape mismatch: {reward.shape[0]} vs {env.n_states}"
     elif method == 'airl':
-        state_encoder = create_cartpole_encoder() if isinstance(env, CartPoleWrapper) else create_gridworld_encoder(grid_size=env.grid_size[0])
+        state_encoder = create_cartpole_encoder() if isinstance(env, CartPoleWrapper) else create_gridworld_encoder(grid_size=env.grid_size[1])
         action_encoder = create_onehot_encoder(num_classes=env.n_actions)
         if isinstance(env, CartPoleWrapper):
             state_dim = env.observation_space.shape[0]
@@ -396,23 +530,21 @@ def run_experiment(cfg):
             action_encoder=action_encoder,
             reward_logit_clip=cfg['irl'].get('reward_logit_clip')
         )
-        reward, metrics, agent_data = agent.train(cfg, env, demos)
-        print(f"[RUN] {method.upper()} reward shape: {reward.shape}, min={reward.min()}, max={reward.max()}")
-        metrics_logger = TrainingLogger()
-        _merge_logs_into_logger(metrics_logger, metrics)
-        metrics = metrics_logger
+        reward, new_metrics, agent_data = agent.train(cfg, env, demos, training_heldout_mask, save_dir=save_dir)
+        _merge_logs_into_logger(metrics, new_metrics)
         if hasattr(env, 'n_states'): 
             assert reward.shape[0] == env.n_states, f"Reward shape mismatch: {reward.shape[0]} vs {env.n_states}"
         additional_data = {
             'training_logs': metrics,
             'reward': reward,
+            'state_encoder': state_encoder,
             'policy': agent.policy,
             'discriminator': agent.discriminator,
             'action_dim': action_dim,
             **agent_data
         }
     elif method == 'causal_airl':
-        state_encoder = create_cartpole_encoder() if isinstance(env, CartPoleWrapper) else create_gridworld_encoder(grid_size=env.grid_size[0])
+        state_encoder = create_cartpole_encoder() if isinstance(env, CartPoleWrapper) else create_gridworld_encoder(grid_size=env.grid_size[1])
         action_encoder = create_onehot_encoder(num_classes=env.n_actions)
         if isinstance(env, CartPoleWrapper):
             state_dim = env.observation_space.shape[0]
@@ -429,22 +561,20 @@ def run_experiment(cfg):
             action_dim=action_dim,
             latent_dim=cfg['irl']['latent_dim'],
             gamma=cfg['irl']['gamma'],
-            invariance_penalty=cfg['irl']['invariance_penalty'],
+            invariance_penalty=cfg['irl']['inv_coeff'],
             lr=cfg['irl']['lr'],
             state_encoder=state_encoder,
             action_encoder=action_encoder,
             reward_logit_clip=cfg['irl'].get('reward_logit_clip')
         )
-        reward, metrics, agent_data = agent.train(cfg, env, demos)
-        print(f"[RUN] {method.upper()} reward shape: {reward.shape}, min={reward.min()}, max={reward.max()}")
-        metrics_logger = TrainingLogger()
-        _merge_logs_into_logger(metrics_logger, metrics)
-        metrics = metrics_logger
+        reward, new_metrics, agent_data = agent.train(cfg, env, demos, training_heldout_mask, save_dir=save_dir)
+        _merge_logs_into_logger(metrics, new_metrics)
         if hasattr(env, 'n_states'): 
             assert reward.shape[0] == env.n_states, f"Reward shape mismatch: {reward.shape[0]} vs {env.n_states}"
         additional_data = {
             'training_logs': metrics,
             'agent': agent,  # Store agent for later use
+            'state_encoder': state_encoder,
             'reward': reward,
             'policy': agent.policy,
             'discriminator': agent.discriminator,
@@ -459,6 +589,35 @@ def run_experiment(cfg):
 
     # Add environment and final metrics
     additional_data['env'] = env
+
+    # Final metrics summary (append last values for key series)
+    try:
+        logs = metrics.get_logs() if hasattr(metrics, "get_logs") else metrics
+        def last(key):
+            v = logs.get(key, None)
+            if isinstance(v, list) and v: return v[-1]
+            return v
+        final_metrics = {}
+        for k in ["wall_time_sec","env_steps","reward_correlation","value_correlation",
+                  "policy_agreement","avg_episode_return","avg_episode_length",
+                  "episode_return_std"]:
+            v = last(k)
+            if v is not None: final_metrics[f"final_{k}"] = float(v) if isinstance(v, (int,float)) else v
+        if final_metrics:
+            metrics.log(final_metrics)
+            print(f"[SUMMARY] Final metrics: {final_metrics}")
+    except Exception as _e:
+        print(f"[WARN] Failed to write final summary: {_e}")
+
+    # Log minimal, consistent env meta into the metrics for traceability
+    try:
+        metrics.log({
+            "env_confounded": bool(cfg.get('env', {}).get('confounded', False)) or hasattr(env, 'confounder_values'),
+            "env_slip_prob": float(cfg.get('env', {}).get('slip_prob', 0.0)),
+            "eval_test_z": cfg.get('eval', {}).get('test_z', None)
+        })
+    except Exception as _e:
+        print(f"[WARN] Failed to log env meta: {_e}")
 
     log_memory("Before Value Iteration")
     # Skip value iteration if requested
@@ -481,13 +640,78 @@ def run_experiment(cfg):
                 }
                 # Log the aggregate summary metrics
                 metrics.log(aggregate_metrics)
+                # Additional direct evaluation with current policy (rollouts)
+                try:
+                    policy = additional_data.get('policy')
+                    if policy is not None:
+                        R, L = [], []
+                        episodes = 10
+                        for _ in range(episodes):
+                            obs = env.reset()
+                            if isinstance(obs, tuple):
+                                obs = obs[0]
+                            done = False
+                            steps = 0
+                            total_return = 0.0
+                            # Ensure rollout matches the training input pipeline
+                            _cp_enc = additional_data.get('state_encoder', None)
+                            if _cp_enc is None:
+                                _cp_enc = create_cartpole_encoder()
+                            while not done and steps < 500:
+                                with torch.no_grad():
+                                    _x = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
+                                    _x_enc = _cp_enc(_x)
+                                    action = policy(_x_enc).sample().item()
+                                next_obs, r, terminated, truncated, _ = env.step(action)
+                                done = terminated or truncated
+                                total_return += float(r)
+                                obs = next_obs
+                                steps += 1
+                            R.append(total_return); L.append(steps)
+                        max_steps = getattr(getattr(env, 'env', None), 'spec', None).max_episode_steps if hasattr(getattr(env, 'env', None), 'spec') and getattr(env.env, 'spec') else 500
+                        success_thresh = max_steps - 5 if isinstance(max_steps, int) else 495
+                        success_rate = float(np.mean(np.array(L) >= success_thresh))
+                        metrics.log({
+                            'eval_return_mean': float(np.mean(R)),
+                            'eval_return_std': float(np.std(R)),
+                            'eval_length_mean': float(np.mean(L)),
+                            'success_rate': success_rate
+                        })
+                except Exception as _e:
+                    print(f"[WARN] CartPole rollout eval failed: {_e}")
+
         else:
             # Pass precomputed T if available
             learned_state_reward = np.asarray(reward, dtype=float).reshape(-1)
+            # Use potential-stripped reward for AIRL on GridWorld to get meaningful r_true vs r_learned correlations
+            if method == 'airl' and hasattr(env, 'grid_size'):
+                try:
+                    se = additional_data.get('state_encoder')
+                    if se is None:
+                        # Fallback: construct the correct encoder for GridWorld
+                        se = create_gridworld_encoder(grid_size=env.grid_size[1])
+                    learned_state_reward = _compute_state_reward_from_airl(
+                        additional_data['discriminator'], se, env
+                    )
+                    np.save(os.path.join(save_dir, 'learned_reward_state.npy'), learned_state_reward)
+                except Exception as _e:
+                    print(f"[WARN] Failed to compute state-only reward for AIRL: {_e}")
+
             print(f"[DEBUG] Learned reward vector shape: {learned_state_reward.shape}")
             T = additional_data.get('T', None)
             if T is not None:
                 print(f"[{method.upper()}] Using {'sparse' if issparse(T) else 'dense'} transition matrix")
+
+            # Persist transition matrix for reproducibility
+            try:
+                if issparse(T):
+                    save_npz(os.path.join(save_dir, 'T_sparse.npz'), T)
+                    additional_data['transition_matrix_file'] = 'T_sparse.npz'
+                else:
+                    np.save(os.path.join(save_dir, 'T.npy'), T)
+                    additional_data['transition_matrix_file'] = 'T.npy'
+            except Exception as e:
+                print(f'[WARN] Persist T failed: {e}')
 
             # Optional held-out state masking for generalisation tests
             heldout_mask = None
@@ -518,6 +742,15 @@ def run_experiment(cfg):
                     # If no held-out region is configured, region stays None and we don't need any warning
                     print(f"[Warning] Held-out region '{region}' specified but environment doesn't support it")
 
+            # Enforce test_z for cross-confounder evaluation
+            test_z = cfg['eval'].get('test_z', None)
+            if test_z is not None and hasattr(env, 'set_confounder'):
+                print(f"[Info] Setting environment confounder to test_z={test_z} for evaluation")
+                if isinstance(env, CartPoleWrapper):
+                    env.set_confounder(float(test_z))
+                else:
+                    env.z = test_z  # For ConfoundedGridWorld
+
             eval_results = evaluate_irl_result(env, cfg, save_dir, learned_state_reward, cfg['irl']['gamma'], T=T, heldout_mask=heldout_mask)
 
             # Ensure all environments log evaluation results consistently
@@ -530,8 +763,12 @@ def run_experiment(cfg):
                 # For CartPole, estimate value function via policy rollouts
                 policy = additional_data.get('policy')
                 if policy is not None:
-                    # Approximate V as average episode returns over state space
-                    V_approx = np.array([eval_results.get('avg_episode_return', 0.0)])
+                    # Approximate V from training logs, avoid using undefined eval_results
+                    logs = metrics.get_logs() if hasattr(metrics, 'get_logs') else {}
+                    avg_ret_list = logs.get('avg_episode_return', [])
+                    avg_ret = float(np.mean(avg_ret_list)) if len(avg_ret_list) > 0 else 0.0
+                    V_approx = np.array([avg_ret])
+
                     np.save(os.path.join(save_dir, 'V.npy'), V_approx)
                     print(f"[INFO] Saved CartPole value function approximation")
             except Exception as e:
@@ -569,6 +806,9 @@ def run_experiment(cfg):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     learned_trajectories = None
 
+    # Configurable eval horizon (default 1000 for backward-compat)
+    eval_max_steps = _infer_eval_max_steps(env, cfg)
+
     log_memory("Before Trajectory Generation")
     if not cfg['eval'].get('gen_trajectories', True):
         print(f"[Skipping] Trajectory generation for method '{method}' disabled (eval.gen_trajectories={cfg['eval'].get('gen_trajectories')})")
@@ -581,12 +821,12 @@ def run_experiment(cfg):
             if isinstance(env, CartPoleWrapper):
                 state_encoder = create_cartpole_encoder()
             elif hasattr(env, 'grid_size'):
-                state_encoder = create_gridworld_encoder(grid_size=env.grid_size[0])
+                state_encoder = create_gridworld_encoder(grid_size=env.grid_size[1])
             else:
                 raise ValueError("Unknown environment type for state encoder.")
 
             learned_trajectories = save_trajectories(
-                policy, env, n_traj=10, device=device, state_encoder=state_encoder
+                policy, env, n_traj=10, device=device, state_encoder=state_encoder, max_steps=eval_max_steps
             )
             np.save(os.path.join(save_dir, 'trajectories.npy'), np.array(learned_trajectories, dtype=object))
             
@@ -594,7 +834,7 @@ def run_experiment(cfg):
             if hasattr(env, 'confounder_values'):
                 for z in env.confounder_values:
                     z_trajs = save_trajectories(
-                        policy, env, n_traj=10, z=z, device=device, state_encoder=state_encoder
+                        policy, env, n_traj=10, z=z, device=device, state_encoder=state_encoder, max_steps=eval_max_steps
                     )
                     np.save(os.path.join(save_dir, f'trajectories_z{z}.npy'), np.array(z_trajs, dtype=object))
         
@@ -617,7 +857,7 @@ def run_experiment(cfg):
             
             # Generate trajectories
             learned_trajectories = save_trajectories(
-                policy_fn, env, n_traj=10, torch_policy=False
+                policy_fn, env, n_traj=10, torch_policy=False, max_steps=eval_max_steps
             )
             np.save(os.path.join(save_dir, 'trajectories.npy'), np.array(learned_trajectories, dtype=object))
             
@@ -625,7 +865,7 @@ def run_experiment(cfg):
             if hasattr(env, 'confounder_values'):
                 for z in env.confounder_values:
                     z_trajs = save_trajectories(
-                        policy_fn, env, n_traj=10, z=z, torch_policy=False
+                        policy_fn, env, n_traj=10, z=z, torch_policy=False, max_steps=eval_max_steps
                     )
                     np.save(os.path.join(save_dir, f'trajectories_z{z}.npy'), np.array(z_trajs, dtype=object))
     log_memory("After Trajectory Generation")
@@ -644,6 +884,83 @@ def run_experiment(cfg):
         new_metrics["reward_mse"] = None
     
     # 2. Trajectory overlap (if trajectories were generated)
+    # Trajectory diversity + per-episode eval metrics (guarded)
+    if learned_trajectories is not None:
+        try:
+            visits = {}
+            # Per-episode statistics
+            ep_lengths = []
+            ep_terminated = []
+            for traj in learned_trajectories:
+                # episode length: if terminal sentinel (last action None), count steps before it
+                if len(traj) > 0 and traj[-1][1] is None:
+                    ep_len = max(0, len(traj) - 1)
+                    iter_pairs = traj[:-1]
+                    ep_terminated.append(True)
+                else:
+                    ep_len = len(traj)
+                    iter_pairs = traj
+                    ep_terminated.append(False)
+                ep_lengths.append(ep_len)
+                for (s, a) in iter_pairs:  # Exclude final state
+                    s_key = tuple(s) if hasattr(s, '__iter__') else s
+                    visits[s_key] = visits.get(s_key, 0) + 1
+
+            if visits:
+                counts = np.array(list(visits.values()), dtype=float)
+                p = counts / counts.sum()
+                traj_entropy = float(-np.sum(p * np.log(p + 1e-12)))
+                new_metrics["trajectory_entropy"] = traj_entropy
+            else:
+                new_metrics["trajectory_entropy"] = 0.0
+
+            # Per-episode eval metrics
+            if ep_lengths:
+                ep_lengths = np.asarray(ep_lengths, dtype=float)
+                ep_terminated = np.asarray(ep_terminated, dtype=bool)
+                new_metrics["eval_episode_length_mean"] = float(np.mean(ep_lengths))
+                if np.any(ep_terminated):
+                    new_metrics["eval_steps_to_goal_mean"] = float(np.mean(ep_lengths[ep_terminated]))
+                else:
+                    new_metrics["eval_steps_to_goal_mean"] = None
+                new_metrics["eval_success_rate"] = float(np.mean(ep_terminated))
+                new_metrics["eval_timeout_rate"] = float(1.0 - new_metrics["eval_success_rate"])
+
+        except Exception as e:
+            print(f"[WARN] Trajectory diversity computation failed: {e}")
+            new_metrics["trajectory_entropy"] = None
+    else:
+        new_metrics["trajectory_entropy"] = None
+
+    # Reward distribution analysis (fixed)
+    if reward is not None and hasattr(env, 'grid_size'):
+        rw = np.asarray(reward).ravel().astype(float)
+        reward_stats = {
+            'reward_sparsity': float((np.abs(rw) < 1e-6).mean()),
+            'reward_range': float(rw.max() - rw.min()) if rw.size > 0 else 0.0,
+            'reward_std': float(rw.std()) if rw.size > 0 else 0.0,
+            'reward_skewness': float(((rw - rw.mean())**3).mean() / (rw.std()**3 + 1e-8)) # Reward skewness (third standardized moment)
+        }
+
+        # Gini coefficient on |reward|
+        absr = np.abs(rw)
+        if absr.sum() > 0 and absr.size > 1:
+            s = np.sort(absr)
+            n = s.size
+            gini = (2*np.arange(1,n+1)-n-1).dot(s)/(n*s.sum())
+            reward_stats['reward_gini_abs'] = float(gini)
+
+        # Histogram entropy on normalized |reward|
+        if absr.max() > absr.min():
+            hist, _ = np.histogram(absr, bins=min(20, len(absr)//5+1), density=True)
+            hist = hist[hist > 0]  # Remove zero bins
+            if len(hist) > 1:
+                p_hist = hist / hist.sum()
+                hist_entropy = float(-np.sum(p_hist * np.log(p_hist)))
+                reward_stats['reward_hist_entropy'] = hist_entropy
+
+        new_metrics.update(reward_stats)
+
     if learned_trajectories is not None:
         new_metrics["trajectory_overlap"] = compute_trajectory_overlap(demos, learned_trajectories)
     else:

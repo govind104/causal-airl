@@ -14,6 +14,8 @@ class TrainingLogger:
         def sanitize(val):
             if isinstance(val, (float, int)):
                 return float(val)
+            if val is None:
+                return None
             if isinstance(val, torch.Tensor):
                 if val.numel() == 1:
                     return float(val.item())
