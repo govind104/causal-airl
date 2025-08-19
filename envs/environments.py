@@ -2,6 +2,7 @@ import abc
 import numpy as np
 import random
 import gymnasium as gym
+
 from typing import Any, List, Tuple, Optional, Dict, Union
 from scipy.sparse import csr_matrix, coo_matrix
 
@@ -131,11 +132,11 @@ class GridWorld(BaseEnv):
         else:
             raise ValueError(f"Unknown reward_type {self.reward_type}")
 
-    def _value_iteration(self, threshold=1e-4) -> np.ndarray:
+    def _value_iteration(self, threshold=1e-4, max_iterations: int = 1000) -> np.ndarray:
         V = np.zeros((self.n_rows, self.n_cols))
         policy = np.zeros((self.n_rows, self.n_cols), dtype=int)
 
-        while True:
+        for _iter in range(max_iterations):
             delta = 0
             for i in range(self.n_rows):
                 for j in range(self.n_cols):
@@ -144,13 +145,31 @@ class GridWorld(BaseEnv):
                         continue
                     q_vals = []
                     for a in self.actions:
-                        delta_pos = self.action_map[a]
-                        next_s = (i + delta_pos[0], j + delta_pos[1])
-                        if not self.in_bounds(next_s):
-                            next_s = s
-                        r = float(self.compute_reward(next_s))
-                        assert np.isscalar(V[next_s]), f"V[next_s] is not scalar: shape={np.shape(V[next_s])}"
-                        q_vals.append(r + self.gamma * V[next_s])
+                        if self.slip_prob == 0.0:
+                            # deterministic
+                            delta_pos = self.action_map[a]
+                            next_s = (i + delta_pos[0], j + delta_pos[1])
+                            if not self.in_bounds(next_s):
+                                next_s = s
+                            r = float(self.compute_reward(next_s))
+                            assert np.isscalar(V[next_s]), f"V[next_s] is not scalar: shape={np.shape(V[next_s])}"
+                            q_vals.append(r + self.gamma * V[next_s])
+                        else:
+                            # stochastic: expectation over actually executed actions given slip
+                            probs = np.full(self.n_actions, self.slip_prob / (self.n_actions - 1))
+                            probs[a] = 1.0 - self.slip_prob
+                            q_sa = 0.0
+                            for a_exec, p in enumerate(probs):
+                                if p <= 1e-8:
+                                    continue
+                                dpos = self.action_map[a_exec]
+                                ns = (i + dpos[0], j + dpos[1])
+                                if not self.in_bounds(ns):
+                                    ns = s
+                                r = float(self.compute_reward(ns))
+                                assert np.isscalar(V[ns]), f"V[ns] is not scalar: shape={np.shape(V[ns])}"
+                                q_sa += p * (r + self.gamma * V[ns])
+                            q_vals.append(q_sa)
                     best_q = max(q_vals)
                     best_a = np.argmax(q_vals)
                     delta = max(delta, abs(V[s] - best_q))
@@ -158,6 +177,8 @@ class GridWorld(BaseEnv):
                     policy[s] = best_a
             if delta < threshold:
                 break
+        else:
+            print(f"[warning] value iteration hit max_iterations={max_iterations}")
         return policy
 
     def sample_expert_trajectories(
@@ -169,10 +190,12 @@ class GridWorld(BaseEnv):
         policy = self._value_iteration() if optimality == "optimal" else None
         trajectories = []
 
-        # Compute grid-dependent H_max
+        # Slip-aware, grid-dependent H_max
         W, H = self.grid_size
         min_path = (W - 1) + (H - 1)
-        H_max = min(int(2.0 * min_path + 5), 100)
+        slowdown = 1.0 / max(1.0 - self.slip_prob, 1e-6)
+        H_cap = max(100, (W * H))
+        H_max = min(int(slowdown * (min_path + (W + H) + 10)), H_cap)
 
         for _ in range(n_trajectories):
             traj = []
@@ -180,14 +203,34 @@ class GridWorld(BaseEnv):
             done = False
             steps = 0
             if _ == 0:
-                print(f"[GridWorld] H_max set to {H_max} for grid size {W}×{H}")
+                print(f"[GridWorld] H_max set to {H_max} for grid size {W}×{H}.")
             while not done and steps < H_max:
                 a = policy[s] if optimality == "optimal" else np.random.choice(self.actions)
                 s_prime, r, done, _ = self.step(a)
                 traj.append((s, a, r, s_prime))
                 s = s_prime
                 steps += 1
+
+                # Explicit terminal verification
+                if s_prime in self.terminal_states_set:
+                    done = True
+                    break
+
             trajectories.append(traj)
+
+        # Post-check: Warn if any traj didn't end on terminal
+        bad = 0
+        for i, tr in enumerate(trajectories):
+            if not tr:
+                bad += 1
+                continue
+            if tr[-1][3] not in self.terminal_states_set:
+                bad += 1
+                if bad <= 3:
+                    print(f"[warning] trajectory {i} did not reach a terminal state.")
+        if bad > 0:
+            print(f"[Warning] {bad}/{len(trajectories)} trajectories failed to terminate at a goal.")
+
         return trajectories
 
     def render(self, mode="human"):
@@ -252,7 +295,9 @@ class GridWorld(BaseEnv):
             for (s, a, r, s_next) in traj:
                 idx = s[0] * self.n_cols + s[1]
                 feat_exp[idx] += 1
-        return feat_exp / len(trajectories)
+
+        # Normalize by number of trajectories as documented
+        return feat_exp / len(trajectories) if len(trajectories) > 0 else feat_exp
 
     def get_all_states(self):
         return [
@@ -327,7 +372,6 @@ class GridWorld(BaseEnv):
                             T[s, a, s_prime] += p
             self._cached_T = T
             return T
-        print(f"Built transition matrix: shape={T_sparse.shape} (sparse={sparse})")
 
     def reset_transition_cache(self):
         self._cached_T = None
@@ -386,31 +430,71 @@ class ConfoundedGridWorld(GridWorld):
         )
         self.default_z = confounder_value
         self.z: Optional[int] = confounder_value  # current latent confounder
+        self.confounder_values = [0, 1]  # Enable per-Z logic in run_experiment.py
 
     def _confounded_policy(self, s: Tuple[int, int], z: int) -> int:
         """
-        Confounder-conditioned expert policy.
-        - z = 0: bias towards goal directly
-        - z = 1: prefers bottom-left or risk-averse paths
+        Confounder-conditioned expert policy (dynamic & goal-relative).
+        z = 0 → pure goal-seeking
+        z = 1 → convex blend: goal-seeking ⊕ mild anti-goal bias (relative to nearest terminal)
+        Always excludes off-grid actions to prevent stalls.
         """
         r, c = s
-        goal_r, goal_c = self.terminal_states[0]
+        # Use nearest terminal so behavior adapts to any grid/goal set
+        goal_r, goal_c = min(self.terminal_states, key=lambda t: abs(t[0]-r)+abs(t[1]-c))
 
-        # Heuristic bias
-        if z == 0:  # direct goal-seeker
-            delta_r = goal_r - r
-            delta_c = goal_c - c
-        elif z == 1:  # risk-averse, avoid top-right
-            delta_r = -r
-            delta_c = -c
+        # 1) Goal-seeking preferences (reduce L1 distance)
+        goal_pref = np.zeros(4, dtype=float)  # [UP, DOWN, LEFT, RIGHT]
+        if r > goal_r: goal_pref[0] += 1.0  # UP
+        if r < goal_r: goal_pref[1] += 1.0  # DOWN
+        if c > goal_c: goal_pref[2] += 1.0  # LEFT
+        if c < goal_c: goal_pref[3] += 1.0  # RIGHT
 
-        probs = np.ones(4)
-        if delta_r < 0: probs[0] += 1  # up
-        if delta_r > 0: probs[1] += 1  # down
-        if delta_c < 0: probs[2] += 1  # left
-        if delta_c > 0: probs[3] += 1  # right
-        probs = probs / probs.sum()
+        # 2) Anti-goal (increase L1) — dynamic, relative to goal
+        anti_pref = np.zeros(4, dtype=float)
+        if r > goal_r: anti_pref[1] += 1.0  # move further DOWN
+        if r < goal_r: anti_pref[0] += 1.0  # move further UP
+        if c > goal_c: anti_pref[3] += 1.0  # move further RIGHT
+        if c < goal_c: anti_pref[2] += 1.0  # move further LEFT
+
+        alpha = 0.30 if z == 1 else 0.0  # mild → still goal-directed
+        prefs = (1.0 - alpha) * goal_pref + alpha * anti_pref
+
+        # 3) Mask invalid actions, add tiny epsilon for exploration
+        eps = 1e-6
+        valid = np.ones(4, dtype=bool)
+        for a, (dr, dc) in enumerate([(-1,0),(1,0),(0,-1),(0,1)]):
+            ni, nj = r + dr, c + dc
+            if not self.in_bounds((ni, nj)):
+                valid[a] = False
+        prefs = np.where(valid, prefs + eps, 0.0)
+        if prefs.sum() <= 0:
+            # At goal or boxed in: fall back to any valid move
+            prefs = np.where(valid, 1.0, 0.0)
+        probs = prefs / prefs.sum()
         return np.random.choice(self.actions, p=probs)
+
+    def expert_policy(self, state, z=None, optimality="optimal"):
+        """
+        Public interface for confounded expert policy.
+
+        Args:
+            state: Environment state
+            z: Confounder value (uses self.z if None)
+            optimality: "optimal" uses confounded policy, "random" is random
+
+        Returns:
+            Action index
+        """
+        if optimality == "random":
+            return np.random.choice(self.actions)
+
+        current_z = z if z is not None else self.z
+        if current_z is None:
+            current_z = self.default_z
+
+        assert current_z is not None, "No confounder value available"
+        return self._confounded_policy(state, current_z)
 
     def _rollout_confounded_policy(
         self,
@@ -425,10 +509,12 @@ class ConfoundedGridWorld(GridWorld):
         traj = []
         done = False
 
-        # Compute grid-dependent H_max
+        # Slip-aware, grid-dependent H_max
         W, H = self.grid_size
         min_path = (W - 1) + (H - 1)
-        H_max = min(int(2.0 * min_path + 5), 100)
+        slowdown = 1.0 / max(1.0 - self.slip_prob, 1e-6)
+        H_cap = max(100, (W * H))
+        H_max = min(int(slowdown * (min_path + (W + H) + 10)), H_cap)
 
         steps = 0
         while not done and steps < H_max:
@@ -440,6 +526,15 @@ class ConfoundedGridWorld(GridWorld):
             traj.append((s, a, r, s_prime))
             s = s_prime
             steps += 1
+
+            # Explicit terminal verification
+            if s_prime in self.terminal_states_set:
+                done = True
+                break
+
+        # Post-check: Warn once if this single trajectory didn't end on a terminal
+        if traj and traj[-1][3] not in self.terminal_states_set:
+            print("[warning] trajectory failed to reach a terminal state.")
 
         return traj
 
@@ -457,31 +552,40 @@ class ConfoundedGridWorld(GridWorld):
         Generate expert rollouts conditioned on fixed or given confounder Z.
         - If `z` is provided, it overrides the default_z set in the constructor.
         """
-        if z not in [0, 1]:
+        if z is not None and z not in [0, 1]:
             raise ValueError(f"Invalid confounder z={z}. Must be 0 or 1.")
+
         trajectories = []
         for _ in range(n_trajectories):
             current_z = z if z is not None else self.default_z
-            assert current_z is not None, "Confounder z must be provided via config or argument."
+            assert current_z in [0, 1], "Confounder z must be 0 or 1; set default_z or pass z."
+
             self.z = current_z
             traj = self._rollout_confounded_policy(current_z, optimality=optimality)
             if return_z:
                 trajectories.append((current_z, traj))
             else:
                 trajectories.append(traj)
+
         return trajectories
+
+    def sample_expert_trajectories(
+        self,
+        n_trajectories: int,
+        optimality: str = "optimal",
+        z: Optional[int] = None
+    ):
+        """
+        Route generic API to the confounded generator so that `z` actually controls the expert.
+        """
+        if z is None:
+            # Fall back to constructor default; assert it's set to avoid silent non-confounded demos
+            assert self.default_z is not None, "confounder z must be set via config or argument"
+            z = self.default_z
+        return self.sample_confounded_expert_trajectories(n_trajectories, optimality=optimality, z=z, return_z=False)
 
     def get_current_confounder(self) -> Optional[int]:
         return self.z  # for logging/debug
-    
-    def expert_policy(self, obs: np.ndarray, mode: str = "optimal") -> int:
-        """Handles neutral angles in theoretical edge cases"""
-        angle = obs[2]
-        if angle < -0.05:  # Add tolerance
-            return 0
-        elif angle > 0.05:
-            return 1
-        return np.random.choice([0, 1])  # Random if neutral
     
 class CartPoleWrapper(BaseEnv):
     """
@@ -506,7 +610,7 @@ class CartPoleWrapper(BaseEnv):
         obs, _ = self.env.reset()
         return obs
 
-    def step(self, action: int) -> Tuple[np.ndarray, float, bool, Dict]:
+    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         next_obs, reward, terminated, truncated, info = self.env.step(action)
         return next_obs, reward, terminated, truncated, info
 
@@ -518,9 +622,14 @@ class CartPoleWrapper(BaseEnv):
             raise ValueError(f"Invalid z value: {z}")
         self.z = z
         try:
-            self.env.env.length = z
-        except AttributeError:
-            raise RuntimeError("Unable to set pole length. Gym version mismatch.")
+            # Prefer unwrapped (gymnasium)
+            self.env.unwrapped.length = z
+        except Exception:
+            try:
+                # Fallback (older gym)
+                self.env.env.length = z
+            except Exception:
+                raise RuntimeError("Unable to set pole length. Gym version mismatch.")
 
     def sample_expert_trajectories(
         self,
