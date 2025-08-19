@@ -5,9 +5,7 @@ env:
   reward_value: 1.0
   slip_prob: 0.1
   terminal_states: [[4, 4]]
-  confounded: true
   confounder_value: 0
-  state_representation: "onehot"
 
 expert:
   num_trajectories: 20
@@ -17,31 +15,22 @@ expert:
 irl:
   method: "airl"
   gamma: 0.99
-  horizon: 100
   max_iters: 200
   lr: 0.0003
   entropy_coef: 0.005
-  l1_bound: 1.0
   grad_clip_norm: 0.5
-  hidden_dim: 64        # AIRLDiscriminator hidden layer size
-  l2_reg: 1e-4         # L2 regularization for discriminator
   reward_logit_clip: null
-  device: null
 
 train:
   batch_size: 64
   epochs: 3
   seed: 42
-  verbose: false
 
 eval:
   test_z: null
-  plot: true
-  generalisation: true
   save_dir: "results/confounded/"
   gen_trajectories: true
   heldout_region: null
-  heldout_mask_indices: null
   save_per_z: true
   save_value_function: true
   skip_value_iteration: false
