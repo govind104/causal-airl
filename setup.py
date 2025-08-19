@@ -16,7 +16,6 @@ setup(
         "PyYAML",
         "networkx",
         "psutil",
-        "GitPython",
         "scikit-learn"
     ],
     entry_points={

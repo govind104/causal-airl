@@ -11,4 +11,3 @@ networkx
 pytest
 scikit-learn
 psutil
-GitPython

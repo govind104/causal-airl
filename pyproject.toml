@@ -13,7 +13,6 @@ requires = [
     "networkx",
     "gymnasium[classic_control]",
     "psutil",
-    "GitPython",
     "scikit-learn"
 ]
 build-backend = "setuptools.build_meta"
