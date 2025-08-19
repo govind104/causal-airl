@@ -28,12 +28,6 @@ mkdir -p results/logs
 LOG=results/logs/confounded_gridworld.log
 echo "========== [Confounded GridWorld] ==========" > $LOG
 
-# Config validation
-echo "========== [0] Validating Configs ==========" | tee -a $LOG
-for config in configs/confounded_*.yaml; do
-    python scripts/validate_config.py "$config" | tee -a $LOG
-done
-
 # Core confounded experiments
 
 # Use BEST parameters from your AIRL and Causal-AIRL sweeps
@@ -75,13 +69,14 @@ echo "========== [1] Running Multi-Seed & Trajectory Experiments ==========" | t
 
 for method in airl causal_airl; do
   for z in 0 1; do
-    for seed in 42 123 456; do
+    for seed in 42 123 456 789 2025; do
       for ntraj in 10 20 40; do
         echo "=== Running $method with z=$z seed=$seed traj=$ntraj" | tee -a $LOG
         python -m experiments.run_experiment \
           --config "configs/confounded_${method}_z${z}.yaml" \
           --override "train.seed=${seed}" \
-          --override "expert.num_trajectories=${ntraj}" | tee -a $LOG
+          --override "expert.num_trajectories=${ntraj}" \
+          --override "eval.save_per_z=true" | tee -a $LOG
       done
     done
   done

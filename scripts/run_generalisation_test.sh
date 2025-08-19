@@ -32,7 +32,7 @@ echo "========== [Generalization Test] ==========" > $LOG
 echo "========== [1] Multi-Seed Cross-Confounder Testing ===========" | tee -a $LOG
 
 for method in airl causal_airl; do
-    for seed in 42 123 456; do
+    for seed in 42 123 456 789 2025; do
         for ntraj in 10 20 40; do
             echo "=== Running $method with seed=$seed traj=$ntraj ===" | tee -a $LOG
             # Train z=0, Test z=1
@@ -61,20 +61,28 @@ heldout_regions=("top_left" "bottom_right" "top_right" "bottom_left")
 
 for region in "${heldout_regions[@]}"; do
     for method in airl causal_airl; do
-        for seed in 42 123 456; do
+        for seed in 42 123 456 789 2025; do
             echo "=== Running $method spatial test: region=$region seed=$seed ===" | tee -a $LOG
             python -m experiments.run_experiment \
-            --config "configs/generalization_${method}.yaml" \
-            --override "train.seed=${seed}" \
-            --override "eval.heldout_region=${region}" | tee -a $LOG
+              --config "configs/generalization_${method}.yaml" \
+              --override "train.seed=${seed}" \
+              --override "eval.heldout_region=${region}" | tee -a $LOG
 
             echo "=== Running $method spatial+confounder: region=$region train_z=0 test_z=1 ===" | tee -a $LOG
             python -m experiments.run_experiment \
-            --config "configs/generalization_${method}.yaml" \
-            --override "train.seed=${seed}" \
-            --override "expert.confounder_value=0" \
-            --override "eval.test_z=1" \
-            --override "eval.heldout_region=${region}" | tee -a $LOG
+              --config "configs/generalization_${method}.yaml" \
+              --override "train.seed=${seed}" \
+              --override "expert.confounder_value=0" \
+              --override "eval.test_z=1" \
+              --override "eval.heldout_region=${region}" | tee -a $LOG
+
+            echo "=== Running $method spatial+confounder: region=$region train_z=1 test_z=0 ===" | tee -a $LOG
+            python -m experiments.run_experiment \
+              --config "configs/generalization_${method}.yaml" \
+              --override "train.seed=${seed}" \
+              --override "expert.confounder_value=1" \
+              --override "eval.test_z=0" \
+              --override "eval.heldout_region=${region}" | tee -a $LOG
         done
     done
 done

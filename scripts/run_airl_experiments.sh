@@ -34,6 +34,7 @@ echo "========== [1] Running Parameter Sweep ==========" | tee -a $LOG
 python -m experiments.sweeps \
   --base configs/airl_ablation.yaml \
   --save_root results/airl_ablation \
+  --grid train.seed=42,123,456,789,2025 \
   --grid irl.gamma=0.9,0.95,0.99 \
   --grid expert.num_trajectories=5,10,20,50 \
   --grid env.slip_prob=0.0,0.1,0.2 \

@@ -35,7 +35,7 @@ python -m visualisation.plot_scm_diagram | tee -a $LOG
 # Core experiments
 echo "========== [2] Running Experiments ==========" | tee -a $LOG
 
-for seed in 42 123 456; do
+for seed in 42 123 456 789 2025; do
     for method in ng maxent airl causal_airl; do
         echo "=== Running $method baseline" | tee -a $LOG
         python -m experiments.run_experiment \

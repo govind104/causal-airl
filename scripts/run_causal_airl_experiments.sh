@@ -34,10 +34,17 @@ echo "========== [1] Running Parameter Sweep ==========" | tee -a $LOG
 python -m experiments.sweeps \
   --base configs/causal_airl_ablation.yaml \
   --save_root results/causal_airl_ablation \
+  --grid train.seed=42,123,456,789,2025 \
   --grid irl.kl_coeff=0.001,0.003,0.01 \
   --grid irl.invariance_penalty=0.05,0.1,0.2 \
   --grid irl.inv_coeff=0.0,0.02,0.05 \
   --grid irl.latent_dim=2,4,8 | tee -a $LOG
+
+# Explicit no-penalty control for ablation clarity
+echo "========== [2] No-Penalty Control Run ==========" | tee -a $LOG
+python -m experiments.run_experiment \
+  --config configs/causal_airl_ablation.yaml \
+  --override "irl.inv_coeff=0.0" | tee -a $LOG
 
 # Optional enhanced sweep
 # --sweep_params irl.kl_coeff:irl.invariance_penalty:irl.inv_coeff:irl.latent_dim:irl.num_z_samples:irl.entropy_coef
