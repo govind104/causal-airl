@@ -33,10 +33,11 @@ def soft_value_iteration(
     rewards: np.ndarray,
     gamma: float = 0.99,
     threshold: float = 1e-6,
-    max_iter: int = 1000
+    max_iter: int = 1000,
+    temperature: float = 1.0
 ) -> np.ndarray:
     """
-    Soft value iteration for MaxEnt IRL with numerical stability. Supports sparse/dense computation.
+    Soft value iteration for MaxEnt IRL with temperature scaling and numerical stability.
 
     Args:
         T: Transition matrix [S, A, S']
@@ -48,6 +49,9 @@ def soft_value_iteration(
     Returns:
         V: Soft value function
     """
+    if temperature <= 0:
+        raise ValueError("Temperature must be > 0")
+
     if issparse(T):
         # Sparse matrix handling
         n_states = T.shape[1]
@@ -57,14 +61,14 @@ def soft_value_iteration(
         for _ in range(max_iter):
             V_prev = V.copy()
             # Compute Q(s,a) = T(s,a) @ (rewards + gamma*V)
-            Q_vals = T.dot(rewards + gamma * V)
+            Q_vals = T.dot((rewards + gamma * V) / temperature)
             Q = Q_vals.reshape(n_states, n_actions)
             max_Q = np.max(Q, axis=1, keepdims=True)
             exp_Q = np.exp(Q - max_Q)
             sum_exp = np.sum(exp_Q, axis=1, keepdims=True)
             # Numerical stability for near-zero probabilities
             sum_exp[sum_exp < 1e-20] = 1e-20
-            V = (max_Q + np.log(sum_exp)).flatten()
+            V = temperature * (max_Q + np.log(sum_exp)).flatten()
             
             if np.max(np.abs(V - V_prev)) < threshold:
                 break
@@ -78,13 +82,13 @@ def soft_value_iteration(
             V_prev = V.copy()
             Q = np.zeros((n_states, n_actions))
             for a in range(n_actions):
-                Q[:, a] = T[:, a, :].dot(rewards + gamma * V)
+                Q[:, a] = T[:, a, :].dot((rewards + gamma * V) / temperature)
             max_Q = np.max(Q, axis=1, keepdims=True)
             exp_Q = np.exp(Q - max_Q)
             sum_exp = np.sum(exp_Q, axis=1, keepdims=True)
             # Numerical stability for near-zero probabilities
             sum_exp[sum_exp < 1e-20] = 1e-20
-            V = (max_Q + np.log(sum_exp)).flatten()
+            V = temperature * (max_Q + np.log(sum_exp)).flatten()
             if np.max(np.abs(V - V_prev)) < threshold:
                 break
         return V
@@ -191,7 +195,8 @@ def maxent_irl(
     tol: float = 1e-5,
     reg_lambda: float = 0.0,
     normalize_features: bool = True,
-    verbose: bool = False
+    verbose: bool = False,
+    temperature: float = 1.0
 ) -> Tuple[np.ndarray, dict]:
     """
     Enhanced Maximum Entropy IRL with numerical stability and optimization improvements.
@@ -227,9 +232,13 @@ def maxent_irl(
         for s in traj:
             mu_E += discount * feature_matrix[s]
             discount *= gamma
-    mu_E /= len(trajectories)
+
+    # Normalize by number of trajectories
+    if len(trajectories) > 0:
+        mu_E /= len(trajectories)
+
     if verbose:
-        print(f"Expert feature expectations: {mu_E}")
+        print(f"Expert feature expectations (normalized): {mu_E}")
 
     # Initialize parameters and optimizer state
     theta = np.random.uniform(-0.1, 0.1, size=n_features)
@@ -244,7 +253,7 @@ def maxent_irl(
         R = feature_matrix.dot(theta)
 
         # Compute optimal policy under current reward
-        V = soft_value_iteration(T, R, gamma)
+        V = soft_value_iteration(T, R, gamma, temperature=temperature)
         pi = compute_policy_from_value(T, R, V, gamma)
 
         # Compute expected state visitation frequencies
@@ -359,12 +368,36 @@ def run_maxent_irl(
     """Unified MaxEnt IRL interface"""
     feature_matrix = env.get_feature_matrix()
     use_sparse = cfg['irl'].get('use_sparse_constraints', False)
+
     if not use_sparse and env.n_states > 5000:
         print("[Warning] MaxEnt IRL using dense transitions on large grid — memory risk.")
     T = env.build_transition_matrix(sparse=use_sparse)
     trajectories = preprocess_demos(env, demos)
+
+    # Empirical start distribution from demonstrations (fallback to uniform)
     start_dist = np.ones(env.n_states) / env.n_states
-    
+    try:
+        starts = []
+        for traj in demos:
+            if not traj:
+                continue
+            s0 = traj[0][0]
+            if hasattr(env, "state_to_index"):
+                # gridworld-style (s is (i,j))
+                _, W = env.grid_size
+                starts.append(env.state_to_index(s0, n_cols=W))
+            else:
+                # already an index
+                starts.append(int(s0))
+        if len(starts) > 0:
+            start_dist = np.bincount(np.asarray(starts, dtype=int),
+                                     minlength=env.n_states).astype(float)
+            ssum = start_dist.sum()
+            if ssum > 0:
+                start_dist /= ssum
+    except Exception:
+        pass
+
     log_memory("Before MaxEnt IRL")
     reward, logs = maxent_irl(
         feature_matrix, T, trajectories, start_dist,
@@ -374,7 +407,8 @@ def run_maxent_irl(
         reg_lambda=cfg['irl'].get('reg_lambda', 0.0),
         normalize_features=cfg['irl'].get('normalize_features', True),
         n_iters=cfg['irl']['max_iters'],
-        verbose=cfg['train']['verbose']
+        verbose=cfg['train'].get('verbose', False),
+        temperature=cfg['irl'].get('temperature', 1.0)
     )
     log_memory("After MaxEnt IRL")
     logs = make_json_safe(logs)

@@ -246,8 +246,30 @@ def run_ng_russell(
     use_sparse = cfg['irl'].get('use_sparse_constraints', True)
     T = env.build_transition_matrix(sparse=use_sparse)
     log_memory("After Creating T")
-    
+
+    # Empirical start distribution from demonstrations (fallback to uniform)
     start_dist = np.ones(env.n_states) / env.n_states
+    try:
+        starts = []
+        for traj in demos:
+            if not traj:
+                continue
+            s0 = traj[0][0]
+            if hasattr(env, "state_to_index"):
+                # gridworld-style (s is (i,j))
+                _, W = env.grid_size
+                starts.append(env.state_to_index(s0, n_cols=W))
+            else:
+                starts.append(int(s0))
+        if len(starts) > 0:
+            start_dist = np.bincount(np.asarray(starts, dtype=int),
+                                     minlength=env.n_states).astype(float)
+            ssum = start_dist.sum()
+            if ssum > 0:
+                start_dist /= ssum
+    except Exception:
+        pass
+
     expert_policy = env.get_optimal_policy()
     
     # Clean up demos

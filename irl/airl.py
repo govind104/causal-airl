@@ -1,3 +1,5 @@
+import os
+import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -140,29 +142,6 @@ class AIRLDiscriminator(nn.Module):
                 f = torch.clamp(f, min=-self.reward_logit_clip, max=self.reward_logit_clip)
             return f if log_pi is None else f - log_pi
 
-    def compute_reward(self, s, a=None):
-        """
-        Unified reward interface for attribution/visualisation.
-        If a is None: returns r(s)
-        Else: returns r(s,a)
-        """
-        s_enc = self.state_encoder(s)
-        if a is not None:
-            a_enc = self.action_encoder(a)
-            logits = self.r(torch.cat([s_enc, a_enc], dim=-1))
-        else:
-            zero_actions = torch.zeros(s_enc.shape[0], dtype=torch.long, device=s.device)
-            a_enc = self.action_encoder(zero_actions)
-            logits = self.r(torch.cat([s_enc, a_enc], dim=-1))
-        return logits.squeeze()
-    
-    def state_only_reward(self, s):
-        """Extract state-only reward component r(s) for visualization"""
-        with torch.no_grad():
-            s_enc = self.state_encoder(s)
-            dummy_a = torch.zeros(s_enc.shape[0], self.action_dim, device=self.device)
-            return self.r(torch.cat([s_enc, dummy_a], dim=-1))
-
     def _l2_penalty(self):
         """Compute L2 regularization for all networks"""
         return sum(
@@ -171,17 +150,6 @@ class AIRLDiscriminator(nn.Module):
             for layer in net
             if isinstance(layer, nn.Linear)
         )
-
-    def _get_config(self):
-        return {
-            'state_dim': self.state_dim,
-            'action_dim': self.action_dim,
-            'gamma': self.gamma,
-            'hidden_dim': self.r[0].in_features if isinstance(self.r[0], nn.Linear) else 64,
-            'l2_reg': self.l2_reg,
-            'state_encoder': self.state_encoder,
-            'action_encoder': self.action_encoder
-        }
 
 class AIRLAgent:
     """Complete AIRL agent with training and evaluation logic"""
@@ -234,6 +202,12 @@ class AIRLAgent:
         self.policy.train()
         dist = self.policy(states)
         log_probs = dist.log_prob(actions)
+
+        # Ensure scalar-aligned rewards to avoid (B,B) outer-product via broadcasting
+        if rewards.ndim == 2 and rewards.shape[1] == 1:
+            rewards = rewards.squeeze(-1)
+        elif rewards.ndim > 2:
+            rewards = rewards.view(rewards.size(0))
 
         # Baseline: per-batch mean of rewards
         baseline = rewards.mean().detach()
@@ -310,8 +284,7 @@ class AIRLAgent:
                             s_encoded = self.state_encoder(s_tensor)
                             dist = policy(s_encoded)
                             a = dist.sample().item()
-                            step_out = env.step(a)
-                            s, _, terminated, truncated, _ = step_out
+                            s, _, terminated, truncated, _ = env.step(a)
                             if terminated or truncated:
                                 break
                 return states
@@ -356,24 +329,6 @@ class AIRLAgent:
             return out
         # Fallback: if we cannot form idxs, return as-is (should still pass CartPole)
         return rewards_np
-
-    def extract_reward_components_for_z(self, env, z_value):
-        """
-        Extract reward components for a specific z value (compatibility method for confounded environments).
-        For standard AIRL, this returns the same reward regardless of z_value.
-
-        Returns: (total_reward, invariant_reward, causal_reward) where invariant=total, causal=zeros
-        """
-        print(f"[AIRLAgent] extract_reward_components_for_z called with z={z_value} (AIRL ignores z)")
-
-        # Get standard AIRL reward
-        total_reward = self.extract_reward(env)
-
-        # For AIRL, all reward is considered "invariant" and causal component is zero
-        invariant_reward = total_reward.copy()
-        causal_reward = np.zeros_like(total_reward)
-
-        return total_reward, invariant_reward, causal_reward
 
     def update_discriminator(
         self,
@@ -456,23 +411,43 @@ class AIRLAgent:
         avg_loss = total_loss / total_batches if total_batches > 0 else float('nan')
         return {"discriminator_loss": avg_loss}
 
-    def train(
-        self,
-        cfg: dict,
-        env: BaseEnv,
-        demos: list
-    ) -> Tuple[np.ndarray, dict, dict]:
+    def train(self,
+              cfg: dict,
+              env: BaseEnv,
+              demos: list,
+              heldout_mask: Optional[np.ndarray] = None,
+              save_dir: Optional[str] = None
+              ) -> Tuple[np.ndarray, dict, dict]:
         """Full training loop for AIRL"""
+        wall_time_cum = 0.0
+
+        # Create checkpoint directory if save_dir provided
+        if save_dir is not None:
+            os.makedirs(os.path.join(save_dir, 'checkpoints'), exist_ok=True)
+
         # Prepare expert data
         s_e, a_e, s_pe = self._prepare_expert_data(demos, env)
         
         # Training loop
         for it in range(cfg['irl']['max_iters']):
+            t0 = time.perf_counter()
+
+            # Save checkpoint every 25% iterations
+            if save_dir is not None and (it % max(1, cfg['irl']['max_iters']//4) == 0 or it == cfg['irl']['max_iters'] - 1):
+                try:
+                    reward_snapshot = self.extract_reward(env)
+                    np.save(os.path.join(save_dir, 'checkpoints', f'reward_iter_{it:04d}.npy'), reward_snapshot)
+                except Exception as e:
+                    print(f"[WARN] Checkpoint save failed at iter {it}: {e}")
+
             # Collect agent rollouts
             agent_data = self._collect_agent_rollouts(
-                env, cfg['train']['batch_size']
+                env, cfg['train']['batch_size'], heldout_mask=heldout_mask
             )
             s_pi, a_pi, s_ppi, log_pi = self._process_agent_data(agent_data)
+
+            # Lightweight compute/progress logging
+            self.logger.log({"env_steps": len(agent_data)})
 
             # Evaluate CartPole performance periodically
             if hasattr(env, 'observation_space') and it % 10 == 0:
@@ -501,6 +476,21 @@ class AIRLAgent:
             policy_loss = self.update_policy(s_pi_encoded, a_pi.squeeze(), rewards, entropy_coef, grad_clip_norm)
             self.logger.log({"policy_loss": policy_loss})
         
+
+            # Convergence diagnostics
+            with torch.no_grad():
+                pol_norm = sum(p.norm().item() for p in self.policy.parameters())
+                disc_norm = sum(p.norm().item() for p in self.discriminator.parameters())
+                self.logger.log({
+                    "policy_param_norm": pol_norm,
+                    "discriminator_param_norm": disc_norm,
+                })
+
+            # Time logging
+            dt = time.perf_counter() - t0
+            wall_time_cum += dt
+            self.logger.log({"epoch_time_sec": dt, "wall_time_sec": wall_time_cum})
+
         # Final evaluation
         learned_reward = self.extract_reward(env)
         return learned_reward, self.logger.get_logs(), {
@@ -550,6 +540,7 @@ class AIRLAgent:
     def _prepare_expert_data(self, demos, env):
         """Convert expert demos to tensors"""
         s_list, a_list, s_prime_list = [], [], []
+
         for traj in demos:
             for s, a, _, s_prime in traj:
                 s_list.append(torch.FloatTensor(s))
@@ -560,12 +551,12 @@ class AIRLAgent:
         if hasattr(env, "grid_size"):
             H = env.grid_size[1]
             s_raw = torch.stack([
-                torch.tensor([[env.state_to_index(s.tolist(), n_cols=H)]], dtype=torch.float32)
+                torch.tensor([[env.state_to_index((int(s[0].item()), int(s[1].item())), n_cols=H)]], dtype=torch.float32)
                 for s in s_list
             ]).squeeze(1).to(self.device)
 
             s_prime_raw = torch.stack([
-                torch.tensor([[env.state_to_index(sp.tolist(), n_cols=H)]], dtype=torch.float32)
+                torch.tensor([[env.state_to_index((int(sp[0].item()), int(sp[1].item())), n_cols=H)]], dtype=torch.float32)
                 for sp in s_prime_list
             ]).squeeze(1).to(self.device)
 
@@ -576,30 +567,42 @@ class AIRLAgent:
 
         return s_raw, torch.stack(a_list).squeeze().to(self.device), s_prime_raw
 
-    def _collect_agent_rollouts(self, env, episodes=10):
+    def _collect_agent_rollouts(self, env, episodes=10, heldout_mask=None):
         """Collect policy rollouts for training"""
         data = []
         self.policy.eval()
 
         # Determine input representation
         if hasattr(env, 'grid_size'):
+            # GridWorld logic
             W, H = env.grid_size
-            n_states = W * H
             min_path = (W - 1) + (H - 1)
             H_max = min(int(2.0 * min_path + 5), 100)
+
             for _ in range(episodes):
                 s = env.reset()
                 done = False
                 steps = 0
+
                 while not done and steps < H_max:
                     s_index = env.state_to_index(s, n_cols=H)
+
+                    # Skip if current state is in held-out region
+                    if heldout_mask is not None and heldout_mask[s_index]:
+                        break  # Early episode termination
+
                     s_tensor = torch.tensor([[s_index]], dtype=torch.float32, device=self.device)
                     dist = self.policy(self.state_encoder(s_tensor))
                     a = dist.sample()
                     logp = dist.log_prob(a)
-                    s_next, _, terminated, truncated, _ = env.step(a.item())
-                    done = terminated or truncated
+
+                    s_next, _, done, _ = env.step(a.item())
                     s_next_index = env.state_to_index(s_next, n_cols=H)
+
+                    # Skip transition if next state is in held-out region
+                    if heldout_mask is not None and heldout_mask[s_next_index]:
+                        break  # Early episode termination
+
                     s_next_tensor = torch.tensor([[s_next_index]], dtype=torch.float32, device=self.device)
                     data.append((s_tensor.squeeze(0), a.squeeze(), s_next_tensor.squeeze(0), logp.squeeze()))
                     s = s_next
@@ -634,25 +637,7 @@ class AIRLAgent:
         s, a, s_prime, logp = map(torch.stack, zip(*agent_data))
         return s, a.squeeze(), s_prime, logp.unsqueeze(1)
 
-def compute_airl_reward(
-    discriminator: AIRLDiscriminator,
-    s: torch.Tensor,
-    a: torch.Tensor,
-    s_prime: torch.Tensor,
-    log_pi: torch.Tensor,
-    detach: bool = False,
-    device: torch.device = get_device()
-) -> torch.Tensor:
-    """Compute reward: log D - log(1 - D) = f(s,a,s') - log π(a|s)
-    Args:
-        detach: Whether to detach gradients from discriminator (for policy training)
-    """
-    f = discriminator(s, a, s_prime)
-    if detach:
-        f = f.detach()
-    return f.to(device) - log_pi.to(device)
-
-# ========== OPTIMIZED ENCODERS ========== #
+# ========== ENCODERS ========== #
 
 def create_onehot_encoder(num_classes: int):
     """Optimized one-hot encoder"""
@@ -661,10 +646,6 @@ def create_onehot_encoder(num_classes: int):
         x = x.view(-1)  # Always flatten to 1D index vector
         return F.one_hot(x.long(), num_classes=num_classes).float()
     return encoder
-
-def create_continuous_encoder(input_dim: int):
-    """Identity encoder with shape check"""
-    return lambda x: x.view(-1, input_dim)
 
 def create_gridworld_encoder(grid_size: int):
     """Optimized gridworld encoder (2x faster)"""
@@ -688,15 +669,3 @@ class CartpoleEncoder(nn.Module):
 
 def create_cartpole_encoder():
     return CartpoleEncoder()
-
-def save_model(model: nn.Module, path: str):
-    torch.save({
-        'state_dict': model.state_dict(),
-        'config': model._get_config() if hasattr(model, '_get_config') else {}
-    }, path)
-
-def load_model(cls, path: str):
-    checkpoint = torch.load(path)
-    model = cls(**checkpoint['config']) if 'config' in checkpoint else cls()
-    model.load_state_dict(checkpoint['state_dict'])
-    return model

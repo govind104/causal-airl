@@ -1,4 +1,7 @@
+import os
+import json
 import math
+import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,12 +9,13 @@ import numpy as np
 
 from torch.distributions import Normal, kl_divergence
 from torch.utils.data import DataLoader, TensorDataset
-from typing import Tuple, Dict, Optional, Callable
+from typing import Tuple, Dict, Optional, Callable, Union
 
 from envs.environments import BaseEnv, CartPoleWrapper
 from irl.airl import infer_encoded_dim
 from experiments.logger import TrainingLogger
 from models.policy import PolicyNet
+
 
 def get_device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -138,23 +142,6 @@ class CausalDiscriminator(nn.Module):
 
         return full_reward.var(dim=0).mean()  # [batch_size, 1] → scalar
 
-    def compute_reward(self, s, a=None):
-        """
-        Unified reward interface matching AIRL for attribution/visualization.
-        Returns total reward (invariant + causal) with dummy latent.
-        """
-        # Use dummy latent for consistent comparison with AIRL
-        dummy_latent = torch.zeros(s.shape[0], self.latent_dim, device=s.device)
-        if a is not None:
-            # Return total reward (invariant + causal) like AIRL's unified reward
-            total_reward, _ = self.f(s, a, s, dummy_latent)
-            return total_reward.squeeze()
-        else:
-            # For attribution maps: use dummy actions like AIRL does
-            dummy_actions = torch.zeros(s.shape[0], self.action_dim, device=s.device)
-            total_reward, _ = self.f(s, dummy_actions, s, dummy_latent)
-            return total_reward.squeeze()
-
 class CausalAIRLAgent:
     """Complete Causal AIRL agent with training and evaluation"""
     def __init__(
@@ -178,15 +165,11 @@ class CausalAIRLAgent:
         self.latent_dim = latent_dim
         self.reward_logit_clip = reward_logit_clip
         self.gamma = gamma
-        print(f"[INIT] CausalAIRL latent_dim={latent_dim}, gamma={gamma}")
         self.invariance_penalty = invariance_penalty
 
         self.state_encoder = state_encoder
         self.action_encoder = action_encoder
-        
         self.encoder = CausalEncoder(state_dim, action_dim, latent_dim).to(self.device)
-        print(f"[INIT] CausalEncoder expected input dim: {state_dim + action_dim}")
-
         self.prior = CausalPrior(latent_dim).to(self.device)
 
         self.discriminator = CausalDiscriminator(
@@ -197,12 +180,6 @@ class CausalAIRLAgent:
         # Use encoded dimension for policy to match AIRL
         encoded_dim = infer_encoded_dim(self.state_encoder, env)
         self.policy = PolicyNet(encoded_dim, action_dim).to(self.device)
-
-        self.value_net = nn.Sequential(
-            nn.Linear(state_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1)
-        ).to(self.device)
         
         self.optimizer_d = torch.optim.Adam(
             list(self.discriminator.parameters()) + 
@@ -214,64 +191,6 @@ class CausalAIRLAgent:
             self.policy.parameters(), lr=lr
         )
         self.logger = TrainingLogger()
-
-    def get_reward(self, s, a, s_prime, z=None):
-        """Get causal-aware reward"""
-        with torch.no_grad():
-            if z is None:
-                # Sample latent if not provided
-                a = self.action_encoder(a)
-                z, _, _ = self.encoder(s, a)
-            reward, _ = self.discriminator.f(s, a, s_prime, z)
-        return reward
-
-    def get_invariant_reward(self, s):
-        """Get Z-invariant reward component"""
-        with torch.no_grad():
-            reward = self.discriminator.r_invariant(s)
-        return reward
-
-    def get_reward_components(self, s, a, s_prime):
-        """Returns (total_reward, invariant_component, causal_component)"""
-        assert a.ndim == 2, f"[get_reward_components] Expected one-hot actions. Got shape: {a.shape}"
-        with torch.no_grad():
-            if a.ndim == 3:
-                a = a.squeeze(-1)
-            z, _, _ = self.encoder(s, a)
-
-            r_inv = self.discriminator.r_invariant(s)
-            r_causal = self.discriminator.r_causal(torch.cat([s, a, z], -1))
-
-        return r_inv + r_causal, r_inv, r_causal
-
-    def counterfactual_reward(self, s, a, s_prime, z_values):
-        """Compute average reward under different latent scenarios"""
-        rewards = []
-        for z in z_values:
-            z_tensor = torch.tensor(z).repeat(len(s), 1).to(self.device)
-            reward, _ = self.discriminator.f(s, a, s_prime, z_tensor)
-            rewards.append(reward.mean().item())
-        return rewards
-
-    def save(self, path: str):
-        torch.save({
-            'encoder': self.encoder.state_dict(),
-            'discriminator': self.discriminator.state_dict(),
-            'prior': self.prior.state_dict(),
-            'value_net': self.value_net.state_dict(),
-            'policy': self.policy.state_dict(),
-            'state_encoder': self.state_encoder.state_dict() if self.state_encoder else None
-        }, path)
-
-    def load(self, path: str):
-        checkpoint = torch.load(path, map_location=self.device)
-        self.encoder.load_state_dict(checkpoint['encoder'])
-        self.discriminator.load_state_dict(checkpoint['discriminator'])
-        self.prior.load_state_dict(checkpoint['prior'])
-        self.value_net.load_state_dict(checkpoint['value_net'])
-        self.policy.load_state_dict(checkpoint['policy'])
-        if checkpoint['state_encoder'] and self.state_encoder:
-            self.state_encoder.load_state_dict(checkpoint['state_encoder'])
 
     def update_policy(
         self,
@@ -292,6 +211,12 @@ class CausalAIRLAgent:
 
         dist = self.policy(states_encoded)
         log_probs = dist.log_prob(actions)
+
+        # Ensure scalar-aligned rewards to avoid (B,B) outer-product via broadcasting
+        if rewards.ndim == 2 and rewards.shape[1] == 1:
+            rewards = rewards.squeeze(-1)
+        elif rewards.ndim > 2:
+            rewards = rewards.view(rewards.size(0))
 
         # Baseline: per-batch mean of rewards
         baseline = rewards.mean().detach()
@@ -376,12 +301,6 @@ class CausalAIRLAgent:
         batch_count = 0
 
         for epoch in range(epochs):
-            # ep_loss = 0.0
-            # ep_inv = 0.0
-            # ep_kl_raw = 0.0
-            # ep_kl_loss = 0.0
-            # ep_bce = 0.0
-            # ep_batches = 0
             for s, a, s_p, log_pi, y in loader:
                 # Detach agent tensors to avoid backprop into policy graph
                 s = s.detach().to(self.device)
@@ -407,25 +326,14 @@ class CausalAIRLAgent:
                     z_samples = mu.unsqueeze(0) + std.unsqueeze(0) * eps  # [K, B, Z]
                     z_samples_detached = z_samples.detach()  # STOP-GRAD through z for invariance loss
 
-                    # Expand inputs to match [K, B, ...]
-                    sK = s.unsqueeze(0).expand(num_z_samples, -1, -1)
-                    aK = a_enc.unsqueeze(0).expand(num_z_samples, -1, -1)
-                    spK = s_p.unsqueeze(0).expand(num_z_samples, -1, -1)
-
-                    # Compute rewards across z (vectorized)
-                    rK = []
-                    for k in range(num_z_samples):
-                        r_k, _ = self.discriminator.f(sK[k], aK[k], spK[k], z_samples_detached[k])
-                        rK.append(r_k)
-                    rK = torch.stack(rK, dim=0)  # [K, B, 1]
-
-                    # inv_var remains tensor and connected to discriminator/reward graph
-                    inv_var = rK.var(dim=0, unbiased=False).mean()
+                    # invariance penalty via discriminator helper (keeps graph)
+                    inv_var = self.discriminator.invariance_loss(s, a_enc, s_p, z_samples_detached)
 
                     # Direct variance metric (detached, no-grad)
                     with torch.no_grad():
-                        direct_var_z_reward = rK.var(dim=0, unbiased=False).mean().item()
+                        direct_var_z_reward = inv_var.detach().item()
                     total_var_z_reward += direct_var_z_reward
+
                 else:
                     inv_var = torch.tensor(0.0, device=self.device)
                     total_var_z_reward += 0.0
@@ -445,29 +353,17 @@ class CausalAIRLAgent:
                     total_z_stats['z_std'] += z_std_batch
                     total_z_stats['z_entropy_approx'] += z_entropy_batch
 
-                # print(f"[DEBUG] z_base mean: {z_base.mean().item():.4f}, std: {z_base.std().item():.4f}")
-                # print(f"[DEBUG] z_samples std: {z_samples.std(dim=0).mean().item():.4f}")
-                # print(f"[DEBUG] mu mean: {mu.mean().item():.4f}, std mean: {std.mean().item():.4f}")
-
                 # Get discriminator outputs
-                z_disc, _, _ = self.encoder(s, a_enc)
-                f_out, _ = self.discriminator.f(s, a_enc, s_p, z_disc)
+                f_out, _ = self.discriminator.f(s, a_enc, s_p, z_kl)
                 d_pred = self.discriminator.D(f_out, log_pi)
 
                 # Compute losses
                 disc_bce = F.binary_cross_entropy(d_pred, y)
 
-                # Combine losses
-                # annealed_penalty = self.discriminator.invariance_penalty * (current_epoch / total_epochs)
-                # beta = 0.1 + 0.9 * min(beta_in, current_epoch / max(1, total_epochs / 2))
-                # loss = disc_loss + beta * kl + annealed_penalty * inv_loss_scalar - 1e-2 * mi_proxy
-
                 # Single invariance penalty: tensor inv_var stays in computational graph
                 mi_proxy = mu.pow(2).mean()
                 loss = disc_bce + kl_coeff_eff * kl_post + inv_coeff * inv_var - 1e-3 * mi_proxy
                 loss_scalar = loss.item()
-
-                # print(f"[LOSS DEBUG] disc: {disc_loss.item():.4f} | kl: {kl.item():.4f} | inv: {inv_loss_scalar:.4f}")
 
                 # Optimize
                 self.optimizer_d.zero_grad()
@@ -529,113 +425,10 @@ class CausalAIRLAgent:
 
     def extract_reward_components(self, env) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Compute reward components across representative states.
-        Handles:
-        - Custom GridWorld (via env.get_all_states)
-        - Gymnasium CartPole-v1 (via dynamic rollouts)
-        Returns: (total_reward, invariant_reward, causal_reward)
+        Wrapper to redirect to extract_reward_components_for_z with default confounder for CausalAIRL
         """
-        self.discriminator.eval()
-        self.encoder.eval()
-        idxs = None
-
-        if hasattr(env, 'get_all_states'):
-            print("[CausalAIRL] Using full GridWorld state enumeration.")
-            all_states = env.get_all_states()
-            # Convert (row, col) coords → flat indices to match training representation
-            if len(all_states) > 0 and isinstance(all_states[0], (tuple, list)) and len(all_states[0]) == 2:
-                try:
-                    indices = [env.state_to_index(s) for s in all_states]
-                except TypeError:
-                    if hasattr(env, "grid_size"):
-                        _, W = env.grid_size
-                        indices = [env.state_to_index(s, n_cols=W) for s in all_states]
-                    else:
-                        indices = [env.state_to_index(s) for s in all_states]
-                idxs = np.asarray(indices, dtype=np.int64)
-                raw_states = idxs.reshape(-1, 1).astype(np.float32)
-            else:
-                as_np = np.array(all_states)
-                if as_np.ndim == 1:
-                    idxs = as_np.astype(np.int64)
-                    raw_states = as_np.reshape(-1, 1).astype(np.float32)
-                else:
-                    raw_states = as_np.astype(np.float32).reshape(-1, as_np.shape[-1])
-        else:
-            print("[CausalAIRL] Using replay-based sampling for reward extraction.")
-
-            def collect_states(policy, episodes=10):
-                states = []
-                H_max = env.spec.max_episode_steps if hasattr(env, "spec") and env.spec else 200
-
-                with torch.no_grad():
-                    for _ in range(episodes):
-                        s_raw = env.reset()
-                        s = s_raw[0] if isinstance(s_raw, tuple) else s_raw
-                        for _ in range(H_max):
-                            states.append(s)
-                            s_tensor = torch.tensor(s, dtype=torch.float32, device=self.device).unsqueeze(0)
-                            dist = policy(s_tensor)
-                            a = dist.sample().item()
-                            step_out = env.step(a)
-                            s, _, terminated, truncated, _ = step_out
-                            if terminated or truncated:
-                                break
-                return states
-
-            agent_states = collect_states(self.policy)
-            reset_states = []
-            for _ in range(50):
-                s_raw = env.reset()
-                s = s_raw[0] if isinstance(s_raw, tuple) else s_raw
-                reset_states.append(s)
-            all_states = agent_states + reset_states
-
-            raw_states = np.array(all_states, dtype=np.float32)
-            raw_states = raw_states[np.isfinite(raw_states).all(axis=1)]
-            raw_states = np.unique(raw_states, axis=0)
-
-            if len(raw_states) == 0:
-                raise RuntimeError("No valid states collected for reward extraction.")
-
-            print(f"[CausalAIRL] Sampled {len(all_states)} raw states, {len(raw_states)} unique valid states.")
-            # If this path is used in GridWorld, canonicalize to indices as well
-            if hasattr(env, "grid_size"):
-                try:
-                    idxs = np.array([env.state_to_index(tuple(s.tolist())) for s in raw_states], dtype=np.int64)
-                except TypeError:
-                    _, W = env.grid_size
-                    idxs = np.array([env.state_to_index(tuple(s.tolist()), n_cols=W) for s in raw_states], dtype=np.int64)
-                raw_states = idxs.reshape(-1, 1).astype(np.float32)
-
-        states = self.state_encoder(torch.tensor(raw_states, dtype=torch.float32, device=self.device))
-        # dummy_actions = torch.zeros(len(states), dtype=torch.long, device=self.device)
-        dummy_actions = torch.arange(self.action_dim, device=self.device).repeat(len(states) // self.action_dim + 1)[:len(states)]
-        actions = self.action_encoder(dummy_actions)
-        assert actions.shape[1] == self.action_dim, \
-            f"[CausalAIRL] Encoded actions shape mismatch: got {actions.shape[1]}, expected {self.action_dim}"
-
-        with torch.no_grad():
-            z, _, _ = self.encoder(states, actions)
-            total_reward, inv_reward, causal_reward = self.get_reward_components(states, actions, states)
-
-        total_np  = total_reward.squeeze(-1).detach().cpu().numpy() if total_reward.ndim > 1 else total_reward.detach().cpu().numpy()
-        inv_np    = inv_reward.squeeze(-1).detach().cpu().numpy()   if inv_reward.ndim > 1   else inv_reward.detach().cpu().numpy()
-        causal_np = causal_reward.squeeze(-1).detach().cpu().numpy() if causal_reward.ndim > 1 else causal_reward.detach().cpu().numpy()
-
-        # Canonicalize to flat vectors of length env.n_states in index order (GridWorld)
-        if hasattr(env, "n_states") and idxs is not None:
-            N = int(env.n_states)
-            out_total  = np.zeros(N, dtype=total_np.dtype)
-            out_inv    = np.zeros(N, dtype=inv_np.dtype)
-            out_causal = np.zeros(N, dtype=causal_np.dtype)
-            out_total[idxs]  = total_np
-            out_inv[idxs]    = inv_np
-            out_causal[idxs] = causal_np
-            return out_total, out_inv, out_causal
-
-        # Fallback for non-tabular envs (e.g., CartPole)
-        return total_np, inv_np, causal_np
+        z_default = env.confounder_values[0] if hasattr(env, 'confounder_values') and env.confounder_values else 0
+        return self.extract_reward_components_for_z(env, z_default)
 
     def extract_reward_components_for_z(self, env, z_value):
         """
@@ -686,8 +479,7 @@ class CausalAIRLAgent:
                             s_tensor = torch.tensor(s, dtype=torch.float32, device=self.device).unsqueeze(0)
                             dist = policy(s_tensor)
                             a = dist.sample().item()
-                            step_out = env.step(a)
-                            s, _, terminated, truncated, _ = step_out
+                            s, _, terminated, truncated, _ = env.step(a)
                             if terminated or truncated:
                                 break
                 return states
@@ -720,9 +512,19 @@ class CausalAIRLAgent:
         actions = self.action_encoder(dummy_actions)
         assert actions.shape[1] == self.action_dim, \
             f"[CausalAIRL] Encoded actions shape mismatch: got {actions.shape[1]}, expected {self.action_dim}"
+        #
+        # z_tensor = torch.full((len(states), self.latent_dim), fill_value=0.0, device=self.device)
+        # z_tensor[:, 0] = float(z_value)
 
-        z_tensor = torch.full((len(states), self.latent_dim), fill_value=0.0, device=self.device)
-        z_tensor[:, 0] = float(z_value)
+        z_tensor = torch.zeros((len(states), self.latent_dim), device=self.device)
+        if isinstance(z_value, int) and 0 <= z_value < self.latent_dim:
+            # One-hot encoding for discrete z_value
+            z_tensor[:, z_value] = 1.0
+        elif isinstance(z_value, (list, tuple)):
+            z_val_tensor = torch.tensor(z_value, device=self.device, dtype=torch.float32)
+            z_tensor[:, :min(len(z_val_tensor), self.latent_dim)] = z_val_tensor[:self.latent_dim]
+        else:
+            z_tensor[:, 0] = float(z_value)  # fallback
 
         with torch.no_grad():
             r_inv = self.discriminator.r_invariant(states)
@@ -746,104 +548,6 @@ class CausalAIRLAgent:
 
         # Fallback (CartPole / non-index cases)
         return total_np, inv_np, causal_np
-
-    def extract_reward(self, env) -> np.ndarray:
-        """
-        Unified reward extraction method matching AIRL interface.
-        Returns total reward (invariant + causal) over representative states.
-        """
-        self.discriminator.eval()
-        idxs = None
-
-        # Use same state enumeration logic as AIRL
-        if hasattr(env, 'get_all_states'):
-            print("[CausalAIRL] Using full GridWorld state enumeration.")
-            raw_states = env.get_all_states()
-
-            # Convert (row, col) coords → flat indices to match training representation
-            if len(raw_states) > 0 and isinstance(raw_states[0], (tuple, list)) and len(raw_states[0]) == 2:
-                try:
-                    indices = [env.state_to_index(s) for s in raw_states]
-                except TypeError:
-                    if hasattr(env, "grid_size"):
-                        _, W = env.grid_size
-                        indices = [env.state_to_index(s, n_cols=W) for s in raw_states]
-                    else:
-                        indices = [env.state_to_index(s) for s in raw_states]
-
-                idxs = np.asarray(indices, dtype=np.int64)
-                states_np = idxs.reshape(-1, 1).astype(np.float32)
-            else:
-                as_np = np.array(raw_states)
-                if as_np.ndim == 1:
-                    idxs = as_np.astype(np.int64)
-                    states_np = as_np.reshape(-1, 1).astype(np.float32)
-                else:
-                    states_np = as_np.astype(np.float32).reshape(-1, as_np.shape[-1])
-        else:
-            print("[CausalAIRL] Using replay-based state sampling for reward extraction.")
-            # Same rollout logic as AIRL
-            def collect_states(policy, episodes=10):
-                states = []
-                H_max = env.spec.max_episode_steps if hasattr(env, "spec") and env.spec else 200
-
-                with torch.no_grad():
-                    for _ in range(episodes):
-                        s_raw = env.reset()
-                        s = s_raw[0] if isinstance(s_raw, tuple) else s_raw
-
-                        for _ in range(H_max):
-                            states.append(s)
-                            s_tensor = torch.tensor(s, dtype=torch.float32, device=self.device).unsqueeze(0)
-                            s_encoded = self.state_encoder(s_tensor)  # ENCODE before policy
-                            dist = policy(s_encoded)
-                            a = dist.sample().item()
-                            step_out = env.step(a)
-                            s, _, terminated, truncated, _ = step_out
-                            if terminated or truncated:
-                                break
-                return states
-
-            agent_states = collect_states(self.policy)
-            reset_states = []
-            for _ in range(50):
-                s_raw = env.reset()
-                s = s_raw[0] if isinstance(s_raw, tuple) else s_raw
-                reset_states.append(s)
-
-            all_states = agent_states + reset_states
-            states_np = np.array(all_states, dtype=np.float32)
-            states_np = states_np[np.isfinite(states_np).all(axis=1)]
-            states_np = np.unique(states_np, axis=0)
-
-            if len(states_np) == 0:
-                raise RuntimeError("No valid states collected for reward extraction.")
-
-            if hasattr(env, "grid_size"):
-                _, W = env.grid_size
-                idxs = np.array([env.state_to_index(tuple(s.tolist()), n_cols=W) for s in states_np], dtype=np.int64)
-                states_np = idxs.reshape(-1, 1).astype(np.float32)
-
-        states = torch.tensor(states_np, dtype=torch.float32, device=self.device)
-        dummy_actions = torch.zeros(len(states), dtype=torch.long, device=self.device)
-        dummy_latent = torch.zeros(len(states), self.latent_dim, device=self.device)
-
-        with torch.no_grad():
-            # Use total reward (invariant + causal) for consistency with AIRL
-            states_encoded = self.state_encoder(states)
-            actions_encoded = self.action_encoder(dummy_actions)
-
-            # Get total reward using f() method
-            total_reward, _ = self.discriminator.f(states_encoded, actions_encoded, states_encoded, dummy_latent)
-            rewards_np = total_reward.squeeze(-1).detach().cpu().numpy()
-
-        # Canonicalize to flat vector of length env.n_states in index order
-        if hasattr(env, "n_states") and idxs is not None:
-            out = np.zeros(int(env.n_states), dtype=rewards_np.dtype)
-            out[idxs] = rewards_np
-            return out
-
-        return rewards_np
 
     def _q_warmstart(self, cfg: dict, env: BaseEnv) -> None:
         """Optional q_φ warm-start: pretrain encoder as (s,a)→z classifier."""
@@ -1080,8 +784,19 @@ class CausalAIRLAgent:
 
         return mean_d, max_d
 
-    def train(self, cfg: dict, env: BaseEnv, demos: list) -> Tuple[np.ndarray, dict, dict]:
+    def train(self,
+              cfg: dict,
+              env: BaseEnv,
+              demos: list,
+              heldout_mask: Optional[np.ndarray] = None,
+              save_dir: Optional[str] = None
+              ) -> Tuple[np.ndarray, dict, dict]:
         """Full training loop for Causal AIRL"""
+        wall_time_cum = 0.0
+
+        # Create checkpoint directory if save_dir provided
+        if save_dir is not None:
+            os.makedirs(os.path.join(save_dir, 'checkpoints'), exist_ok=True)
 
         # Optional q_φ warm-start before main training (soft-skip if disabled/unavailable)
         self._q_warmstart(cfg, env)
@@ -1101,11 +816,24 @@ class CausalAIRLAgent:
         
         # Training loop
         for it in range(cfg['irl']['max_iters']):
+            t0 = time.perf_counter()
+
+            # Save checkpoint every 25% iterations
+            if save_dir is not None and (it % max(1, cfg['irl']['max_iters']//4) == 0 or it == cfg['irl']['max_iters'] - 1):
+                try:
+                    reward_snapshot, _, _ = self.extract_reward_components(env)
+                    np.save(os.path.join(save_dir, 'checkpoints', f'reward_iter_{it:04d}.npy'), reward_snapshot)
+                except Exception as e:
+                    print(f"[WARN] Checkpoint save failed at iter {it}: {e}")
+
             # Collect agent rollouts
             agent_data = self._collect_agent_rollouts(
-                env, cfg['train']['batch_size']
+                env, cfg['train']['batch_size'], heldout_mask=heldout_mask
             )
             s_pi, a_pi, s_ppi, log_pi = self._process_agent_data(agent_data)
+
+            # Lightweight compute/progress logging
+            self.logger.log({"env_steps": len(agent_data)})
             
             # Evaluate CartPole performance periodically
             if hasattr(env, 'observation_space') and it % 10 == 0:
@@ -1135,8 +863,10 @@ class CausalAIRLAgent:
                 s_pi_encoded = self.state_encoder(s_pi)
                 a_enc = self.action_encoder(a_pi)
                 z, _, _ = self.encoder(s_pi_encoded, a_enc)
-                rewards, _ = self.discriminator.f(s_pi_encoded, a_enc, self.state_encoder(s_ppi), z)
-                rewards = rewards.squeeze(-1)
+                f_rewards, _ = self.discriminator.f(s_pi_encoded, a_enc, self.state_encoder(s_ppi), z)
+                if self.reward_logit_clip is not None: # Clamp f before subtracting log_pi
+                    f_rewards = torch.clamp(f_rewards, min=-self.reward_logit_clip, max=self.reward_logit_clip)
+                rewards = (f_rewards - log_pi).squeeze(-1) # Reward shaping: f(s,a,s',z) - log π(a|s)
 
             # Log reward statistics
             with torch.no_grad():
@@ -1152,6 +882,22 @@ class CausalAIRLAgent:
             policy_loss = self.update_policy(s_pi_encoded, a_pi, rewards, entropy_coef, grad_clip_norm)
             self.logger.log({"policy_loss": policy_loss})
 
+            # Convergence diagnostics
+            with torch.no_grad():
+                pol_norm = sum(p.norm().item() for p in self.policy.parameters())
+                disc_norm = sum(p.norm().item() for p in self.discriminator.parameters())
+                enc_norm = sum(p.norm().item() for p in self.encoder.parameters())
+                self.logger.log({
+                    "policy_param_norm": pol_norm,
+                    "discriminator_param_norm": disc_norm,
+                    "encoder_param_norm": enc_norm,
+                })
+
+            # Time logging
+            dt = time.perf_counter() - t0
+            wall_time_cum += dt
+            self.logger.log({"epoch_time_sec": dt, "wall_time_sec": wall_time_cum})
+
         # Extract reward components
         learned_reward, inv_reward, causal_reward = self.extract_reward_components(env)
         per_z_rewards = []
@@ -1160,7 +906,7 @@ class CausalAIRLAgent:
                 r_z, _, _ = self.extract_reward_components_for_z(env, z)
                 per_z_rewards.append(r_z)
 
-
+        reward_var_z = None
         if per_z_rewards:
             def pad_arrays_to_same_shape(arrays):
                 """Ensure all arrays have the same shape by padding with NaN"""
@@ -1193,6 +939,35 @@ class CausalAIRLAgent:
             except Exception as e:
                 print(f"[Warning] Failed to compute reward variance across z: {e}")
                 reward_var_z = None
+
+        # Invariance violation analysis
+        if len(per_z_rewards) >= 2:
+            try:
+                # Invariance violation analysis (if >=2 Zs)
+                rz0 = np.asarray(per_z_rewards[0]).ravel()
+                rz1 = np.asarray(per_z_rewards[1]).ravel()
+                diffs = np.abs(rz0 - rz1)
+                inv = {
+                    "max_violation": float(diffs.max()),
+                    "mean_violation": float(diffs.mean()),
+                    "top_violation_state_indices": np.argsort(-diffs)[:10].tolist()
+                }
+                if save_dir is not None:
+                    with open(os.path.join(save_dir, "invariance_analysis.json"), "w") as f:
+                        json.dump(inv, f, indent=2)
+                    print(f"[INFO] Saved invariance analysis to {save_dir}/invariance_analysis.json")
+
+                r0, r1 = per_z_rewards[0].ravel(), per_z_rewards[1].ravel()
+                d = np.abs(r0 - r1)
+                invariance_analysis = {
+                    'invariance_max': float(d.max()),
+                    'invariance_mean': float(d.mean()),
+                    'invariance_top_states': np.argsort(-d)[:10].tolist(),
+                }
+                with open(os.path.join(save_dir, 'invariance_analysis.json'), 'w') as f:
+                    json.dump(invariance_analysis, f, indent=2)
+            except Exception as e:
+                print(f"[WARN] Invariance analysis failed: {e}")
 
         return learned_reward, self.logger.get_logs(), {
             'policy': self.policy,
@@ -1249,7 +1024,6 @@ class CausalAIRLAgent:
 
         for traj in demos:
             for s, a, _, s_prime in traj:
-                # DON'T encode here - keep raw like AIRL
                 s_list.append(torch.FloatTensor(s))
                 a_list.append(torch.LongTensor([a]))
                 s_prime_list.append(torch.FloatTensor(s_prime))
@@ -1258,24 +1032,28 @@ class CausalAIRLAgent:
         if hasattr(self.env, "grid_size"):
             H = self.env.grid_size[1]
             s_raw = torch.stack([
-                torch.tensor([[self.env.state_to_index(s.tolist(), n_cols=H)]], dtype=torch.float32)
+                torch.tensor([[self.env.state_to_index((int(s[0].item()), int(s[1].item())), n_cols=H)]], dtype=torch.float32)
                 for s in s_list
             ]).squeeze(1).to(self.device)
+
             s_prime_raw = torch.stack([
-                torch.tensor([[self.env.state_to_index(sp.tolist(), n_cols=H)]], dtype=torch.float32)
+                torch.tensor([[self.env.state_to_index((int(sp[0].item()), int(sp[1].item())), n_cols=H)]], dtype=torch.float32)
                 for sp in s_prime_list
             ]).squeeze(1).to(self.device)
+
+        # Handle continuous state envs (e.g. CartPole)
         else:
             s_raw = torch.stack(s_list).to(self.device)
             s_prime_raw = torch.stack(s_prime_list).to(self.device)
 
         return s_raw, torch.stack(a_list).squeeze().to(self.device), s_prime_raw
 
-    def _collect_agent_rollouts(self, env, episodes=10):
+    def _collect_agent_rollouts(self, env, episodes=10, heldout_mask=None):
         """Collect policy rollouts for training"""
         data = []
         self.policy.eval()
 
+        # Determine input representation
         if hasattr(env, 'grid_size'):
             # GridWorld logic
             W, H = env.grid_size
@@ -1286,19 +1064,31 @@ class CausalAIRLAgent:
                 s = env.reset()
                 done = False
                 steps = 0
+
                 while not done and steps < H_max:
                     s_index = env.state_to_index(s, n_cols=H)
+
+                    # Skip if current state is in held-out region
+                    if heldout_mask is not None and heldout_mask[s_index]:
+                        break  # Early episode termination
+
                     s_tensor = torch.tensor([[s_index]], dtype=torch.float32, device=self.device)
                     dist = self.policy(self.state_encoder(s_tensor))
                     a = dist.sample()
                     logp = dist.log_prob(a)
-                    s_next, _, terminated, truncated, _ = env.step(a.item())
-                    done = terminated or truncated
+
+                    s_next, _, done, _ = env.step(a.item())
                     s_next_index = env.state_to_index(s_next, n_cols=H)
+
+                    # Skip transition if next state is in held-out region
+                    if heldout_mask is not None and heldout_mask[s_next_index]:
+                        break  # Early episode termination
+
                     s_next_tensor = torch.tensor([[s_next_index]], dtype=torch.float32, device=self.device)
                     data.append((s_tensor.squeeze(0), a.squeeze(), s_next_tensor.squeeze(0), logp.squeeze()))
                     s = s_next
                     steps += 1
+
         else:
             # CartPole case — use raw float vectors
             if hasattr(env, "spec") and env.spec is not None:
