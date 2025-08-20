@@ -43,9 +43,9 @@ def main():
 
         try:
             run_experiment(cfg)
-            print(f"✓ Experiment {i+1} completed successfully")
+            print(f"Experiment {i+1} completed successfully")
         except Exception as e:
-            error_msg = f"✗ Experiment {i+1} failed: {str(e)}"
+            error_msg = f"Experiment {i+1} failed: {str(e)}"
             print(error_msg)
             failed_experiments.append((overrides, str(e)))
             continue  # Continue with next experiment
