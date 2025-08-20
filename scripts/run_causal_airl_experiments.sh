@@ -17,7 +17,6 @@ python -m experiments.sweeps \
   --save_root results/causal_airl_ablation \
   --grid train.seed=42,123,456,789,2025 \
   --grid irl.kl_coeff=0.001,0.003,0.01 \
-  --grid irl.invariance_penalty=0.05,0.1,0.2 \
   --grid irl.inv_coeff=0.0,0.02,0.05 \
   --grid irl.latent_dim=2,4,8 | tee -a $LOG
 
