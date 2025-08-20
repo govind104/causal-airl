@@ -21,8 +21,8 @@ PY="$(resolve_py)"
 set -euo pipefail
 
 # Optional best hyperparams (export before running; empty = no override)
-: "${BEST_AIRL_ENTROPY:=}"
-: "${BEST_AIRL_CLIP:=}"
+: "${BEST_AIRL_ENTROPY:=0.005}"
+: "${BEST_AIRL_CLIP:=1.0}"
 
 # Setup log file
 mkdir -p results/logs
