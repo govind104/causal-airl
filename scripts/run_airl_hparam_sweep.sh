@@ -25,6 +25,7 @@ mkdir -p results/logs
 LOG=results/logs/airl_hparams.log
 echo "========== [AIRL Experiments] ==========" > $LOG
 
+# Run AIRL METHOD hyperparam sweep (entropy_coef, grad_clip_norm)
 echo "========== [1] Running AIRL Hyperparam Sweep ==========" | tee -a $LOG
 
 $PY -m experiments.sweeps \

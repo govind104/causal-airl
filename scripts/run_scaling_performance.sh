@@ -20,7 +20,7 @@ PY="$(resolve_py)"
 
 set -euo pipefail
 
-# Optional best params (export before running; empty = no override)
+# Optional best hyperparams (export before running; empty = no override)
 : "${BEST_AIRL_ENTROPY:=}"
 : "${BEST_AIRL_CLIP:=}"
 : "${BEST_CAIRL_KL:=}"
@@ -35,7 +35,7 @@ echo "method,size,seed,wall_clock_s" > "$CSV"
 echo "========== [Scaling Study: Grid Size vs Performance] ==========" > $LOG
 
 sizes=(5 7 9 11)
-seeds=(42 123 456)
+seeds=(42 123 456 789 2025)
 
 for size in "${sizes[@]}"; do
   # Keep demo density roughly stable with size (tweak if needed)
@@ -52,7 +52,8 @@ for size in "${sizes[@]}"; do
                "eval.save_dir=results/scaling/airl" )
       elif [ "$method" = "causal_airl" ]; then
         BASE="configs/causal_airl_ablation.yaml"
-        OVRS=( "irl.kl_coeff=${BEST_CAIRL_KL}" "irl.inv_coeff=${BEST_CAIRL_INV}" "irl.latent_dim=${BEST_CAIRL_LATENT}"
+        OVRS=( "irl.entropy_coef=${BEST_AIRL_ENTROPY}" "irl.grad_clip_norm=${BEST_AIRL_CLIP}"
+               "irl.kl_coeff=${BEST_CAIRL_KL}" "irl.inv_coeff=${BEST_CAIRL_INV}" "irl.latent_dim=${BEST_CAIRL_LATENT}"
                "eval.save_dir=results/scaling/causal_airl" )
       elif [ "$method" = "ng" ]; then
         BASE="configs/gridworld_baseline_ng.yaml"

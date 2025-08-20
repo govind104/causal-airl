@@ -20,22 +20,33 @@ PY="$(resolve_py)"
 
 set -euo pipefail
 
+# Optional best hyperparams (export before running; empty = no override)
+: "${BEST_AIRL_ENTROPY:=}"
+: "${BEST_AIRL_CLIP:=}"
+
 # Setup log file
 mkdir -p results/logs
 LOG=results/logs/airl_scenarios.log
 echo "========== [AIRL Experiments] ==========" > $LOG
 
-# Run SCENARIO sweep (γ, N, slip, reward_type) with AIRL method hyperparams fixed elsewhere
+# Run SCENARIO sweep (γ, N, slip, reward_type)
 echo "========== [1] Running AIRL Scenario Sweep ==========" | tee -a $LOG
 
-$PY -m experiments.sweeps \
-  --base configs/airl_ablation.yaml \
-  --save_root results/airl_scenarios \
-  --grid train.seed=42,123,456,789,2025 \
-  --grid irl.gamma=0.9,0.95,0.99 \
-  --grid expert.num_trajectories=5,10,20,50 \
-  --grid env.slip_prob=0.0,0.1,0.2 \
-  --grid env.reward_type=sparse,shaped | tee -a $LOG
+BASE_CFG="configs/airl_ablation.yaml"
+COMMON=( "-m" "experiments.sweeps"
+         "--base" "${BASE_CFG}"
+         "--save_root" "results/airl_scenarios"
+         "--grid" "train.seed=42,123,456,789,2025"
+         "--grid" "irl.gamma=0.9,0.95,0.99"
+         "--grid" "expert.num_trajectories=5,10,20,50"
+         "--grid" "env.slip_prob=0.0,0.1,0.2"
+         "--grid" "env.reward_type=sparse,shaped" )
+
+OVRS=()
+[ -n "$BEST_AIRL_ENTROPY" ] && OVRS+=( "--override" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" )
+[ -n "$BEST_AIRL_CLIP" ]    && OVRS+=( "--override" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" )
+
+$PY "${COMMON[@]}" "${OVRS[@]}" | tee -a $LOG
 
 # Footer
 echo "========== AIRL Experiments Complete ==========" | tee -a $LOG

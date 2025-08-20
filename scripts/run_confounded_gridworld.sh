@@ -43,11 +43,14 @@ for method in airl causal_airl; do
         ARGS=( "--config" "configs/confounded_${method}_z${z}.yaml"
                "--override" "train.seed=${seed}"
                "--override" "expert.num_trajectories=${ntraj}"
+               "--override" "eval.test_z=${z}"
                "--override" "eval.save_per_z=true" )
         if [ "$method" = "airl" ]; then
           [ -n "$BEST_AIRL_ENTROPY" ] && ARGS+=( "--override" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" )
           [ -n "$BEST_AIRL_CLIP" ]    && ARGS+=( "--override" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" )
         else
+          [ -n "$BEST_AIRL_ENTROPY" ] && ARGS+=( "--override" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" )
+          [ -n "$BEST_AIRL_CLIP" ]    && ARGS+=( "--override" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" )
           [ -n "$BEST_CAIRL_KL" ]     && ARGS+=( "--override" "irl.kl_coeff=${BEST_CAIRL_KL}" )
           [ -n "$BEST_CAIRL_INV" ]    && ARGS+=( "--override" "irl.inv_coeff=${BEST_CAIRL_INV}" )
           [ -n "$BEST_CAIRL_LATENT" ] && ARGS+=( "--override" "irl.latent_dim=${BEST_CAIRL_LATENT}" )

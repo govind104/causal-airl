@@ -20,7 +20,7 @@ PY="$(resolve_py)"
 
 set -euo pipefail
 
-# Optional best hyperparams (set/export these before running; defaults = no override)
+# Optional best hyperparams (export before running; defaults = no override)
 : "${BEST_AIRL_ENTROPY:=}"
 : "${BEST_AIRL_CLIP:=}"
 : "${BEST_CAIRL_KL:=}"
@@ -51,6 +51,8 @@ for method in airl causal_airl; do
                 [ -n "$BEST_AIRL_ENTROPY" ] && ARGS+=( "--override" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" )
                 [ -n "$BEST_AIRL_CLIP" ]    && ARGS+=( "--override" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" )
                 else
+                [ -n "$BEST_AIRL_ENTROPY" ] && ARGS+=( "--override" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" )
+                [ -n "$BEST_AIRL_CLIP" ]    && ARGS+=( "--override" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" )
                 [ -n "$BEST_CAIRL_KL" ]     && ARGS+=( "--override" "irl.kl_coeff=${BEST_CAIRL_KL}" )
                 [ -n "$BEST_CAIRL_INV" ]    && ARGS+=( "--override" "irl.inv_coeff=${BEST_CAIRL_INV}" )
                 [ -n "$BEST_CAIRL_LATENT" ] && ARGS+=( "--override" "irl.latent_dim=${BEST_CAIRL_LATENT}" )
@@ -68,6 +70,8 @@ for method in airl causal_airl; do
                 [ -n "$BEST_AIRL_ENTROPY" ] && ARGS+=( "--override" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" )
                 [ -n "$BEST_AIRL_CLIP" ]    && ARGS+=( "--override" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" )
                 else
+                [ -n "$BEST_AIRL_ENTROPY" ] && ARGS+=( "--override" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" )
+                [ -n "$BEST_AIRL_CLIP" ]    && ARGS+=( "--override" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" )
                 [ -n "$BEST_CAIRL_KL" ]     && ARGS+=( "--override" "irl.kl_coeff=${BEST_CAIRL_KL}" )
                 [ -n "$BEST_CAIRL_INV" ]    && ARGS+=( "--override" "irl.inv_coeff=${BEST_CAIRL_INV}" )
                 [ -n "$BEST_CAIRL_LATENT" ] && ARGS+=( "--override" "irl.latent_dim=${BEST_CAIRL_LATENT}" )
@@ -94,6 +98,8 @@ for region in "${heldout_regions[@]}"; do
               [ -n "$BEST_AIRL_ENTROPY" ] && ARGS+=( "--override" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" )
               [ -n "$BEST_AIRL_CLIP" ]    && ARGS+=( "--override" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" )
             else
+              [ -n "$BEST_AIRL_ENTROPY" ] && ARGS+=( "--override" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" )
+              [ -n "$BEST_AIRL_CLIP" ]    && ARGS+=( "--override" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" )
               [ -n "$BEST_CAIRL_KL" ]     && ARGS+=( "--override" "irl.kl_coeff=${BEST_CAIRL_KL}" )
               [ -n "$BEST_CAIRL_INV" ]    && ARGS+=( "--override" "irl.inv_coeff=${BEST_CAIRL_INV}" )
               [ -n "$BEST_CAIRL_LATENT" ] && ARGS+=( "--override" "irl.latent_dim=${BEST_CAIRL_LATENT}" )
@@ -110,6 +116,8 @@ for region in "${heldout_regions[@]}"; do
               [ -n "$BEST_AIRL_ENTROPY" ] && ARGS+=( "--override" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" )
               [ -n "$BEST_AIRL_CLIP" ]    && ARGS+=( "--override" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" )
             else
+              [ -n "$BEST_AIRL_ENTROPY" ] && ARGS+=( "--override" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" )
+              [ -n "$BEST_AIRL_CLIP" ]    && ARGS+=( "--override" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" )
               [ -n "$BEST_CAIRL_KL" ]     && ARGS+=( "--override" "irl.kl_coeff=${BEST_CAIRL_KL}" )
               [ -n "$BEST_CAIRL_INV" ]    && ARGS+=( "--override" "irl.inv_coeff=${BEST_CAIRL_INV}" )
               [ -n "$BEST_CAIRL_LATENT" ] && ARGS+=( "--override" "irl.latent_dim=${BEST_CAIRL_LATENT}" )
@@ -126,6 +134,8 @@ for region in "${heldout_regions[@]}"; do
               [ -n "$BEST_AIRL_ENTROPY" ] && ARGS+=( "--override" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" )
               [ -n "$BEST_AIRL_CLIP" ]    && ARGS+=( "--override" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" )
             else
+              [ -n "$BEST_AIRL_ENTROPY" ] && ARGS+=( "--override" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" )
+              [ -n "$BEST_AIRL_CLIP" ]    && ARGS+=( "--override" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" )
               [ -n "$BEST_CAIRL_KL" ]     && ARGS+=( "--override" "irl.kl_coeff=${BEST_CAIRL_KL}" )
               [ -n "$BEST_CAIRL_INV" ]    && ARGS+=( "--override" "irl.inv_coeff=${BEST_CAIRL_INV}" )
               [ -n "$BEST_CAIRL_LATENT" ] && ARGS+=( "--override" "irl.latent_dim=${BEST_CAIRL_LATENT}" )

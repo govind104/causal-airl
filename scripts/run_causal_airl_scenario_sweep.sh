@@ -20,7 +20,9 @@ PY="$(resolve_py)"
 
 set -euo pipefail
 
-# Optional best CAIRL params (export before running; empty = no override)
+# Optional best hyperparams (export before running; empty = no override)
+: "${BEST_AIRL_ENTROPY:=}"
+: "${BEST_AIRL_CLIP:=}"
 : "${BEST_CAIRL_KL:=}"
 : "${BEST_CAIRL_INV:=}"
 : "${BEST_CAIRL_LATENT:=}"
@@ -30,6 +32,7 @@ mkdir -p results/logs
 LOG=results/logs/causal_airl_scenarios.log
 echo "========== [Causal-AIRL Experiments] ==========" > $LOG
 
+# Run SCENARIO sweep (γ, N, slip, reward_type)
 echo "========== [1] Running Causal-AIRL Scenario Sweep ==========" | tee -a $LOG
 
 BASE_CFG="configs/causal_airl_ablation.yaml"
@@ -40,9 +43,12 @@ COMMON=( "-m" "experiments.sweeps"
          "--grid" "irl.gamma=0.9,0.95,0.99"
          "--grid" "expert.num_trajectories=5,10,20,50"
          "--grid" "env.slip_prob=0.0,0.1,0.2"
-         "--grid" "env.reward_type=sparse,shaped" )
+         "--grid" "env.reward_type=sparse,shaped"
+         "--grid" "irl.num_z_samples=1,5" )
 
 OVRS=()
+[ -n "$BEST_AIRL_ENTROPY" ] && OVRS+=( "--override" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" )
+[ -n "$BEST_AIRL_CLIP" ]    && OVRS+=( "--override" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" )
 [ -n "$BEST_CAIRL_KL" ]     && OVRS+=( "--override" "irl.kl_coeff=${BEST_CAIRL_KL}" )
 [ -n "$BEST_CAIRL_INV" ]    && OVRS+=( "--override" "irl.inv_coeff=${BEST_CAIRL_INV}" )
 [ -n "$BEST_CAIRL_LATENT" ] && OVRS+=( "--override" "irl.latent_dim=${BEST_CAIRL_LATENT}" )
