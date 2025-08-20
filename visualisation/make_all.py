@@ -226,7 +226,7 @@ def main():
             skipped += 1
             continue
         if rc == 0:
-            print(f"✓ {st['mod']}")
+            print(f"{st['mod']}")
             ok += 1
         else:
             # print a single-line reason
@@ -235,7 +235,7 @@ def main():
                 # shorten to last non-empty line
                 lines = [ln for ln in reason.splitlines() if ln.strip()]
                 reason = lines[-1] if lines else reason
-            print(f"✗ {st['mod']} — {reason}")
+            print(f"{st['mod']} — {reason}")
             fail += 1
 
     print(f"[make_all] done: ok={ok}, failed={fail}, dry_skipped={skipped} | out_base={args.out}")
