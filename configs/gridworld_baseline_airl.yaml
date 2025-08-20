@@ -9,7 +9,6 @@ env:
 expert:
   num_trajectories: 20
   optimality: "optimal"
-  confounder_value: 0
 
 irl:
   method: "airl"

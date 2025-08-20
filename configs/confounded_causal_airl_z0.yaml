@@ -3,9 +3,8 @@ env:
   grid_size: [5, 5]
   reward_type: "sparse"
   reward_value: 1.0
-  slip_prob: 0.1
+  slip_prob: 0.0
   terminal_states: [[4, 4]]
-  confounder_value: 0
 
 expert:
   num_trajectories: 20
@@ -18,7 +17,7 @@ irl:
   max_iters: 200
   lr: 0.0003
   latent_dim: 2
-  num_z_samples: 5
+  num_z_samples: 1
   kl_coeff: 0.003
   kl_warmup_epochs: 20
   kl_clamp_max: 10.0
