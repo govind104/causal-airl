@@ -1,5 +1,24 @@
 #!/bin/bash
+#$ -N gridworld_baselines
+#$ -q gpu
+#$ -l gpu=1
+#$ -pe sharedmem 2
+#$ -l h_vmem=32G
+#$ -l h_rt=01:00:00
+#$ -wd /exports/eddie/scratch/s2696869/causal-airl
+#$ -o logs/gridworld_baselines.out
+#$ -e logs/gridworld_baselines.err
+#$ -m beas
+#$ -M s2696869@sms.ed.ac.uk
 set -euo pipefail
+
+# Load environment
+. /etc/profile.d/modules.sh
+module load anaconda
+conda activate /exports/eddie/scratch/s2696869/.conda/envs/causal-irl-env
+
+# Install in editable mode
+pip install -e /exports/eddie/scratch/s2696869/causal-airl
 
 # Ensure logs directory exists
 mkdir -p logs
