@@ -1,13 +1,13 @@
+# Synced with environment.yaml
 gymnasium[classic_control]
 numpy
 scipy
-torch
-matplotlib
-seaborn
 pandas
-tqdm
+matplotlib
 PyYAML
 networkx
-pytest
-scikit-learn
 psutil
+torch
+
+# Dev/testing (not installed as runtime dependency via setup.py)
+pytest
