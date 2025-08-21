@@ -5,6 +5,7 @@ env:
   reward_value: 1.0
   slip_prob: 0.0
   terminal_states: [[4, 4]]
+  confounder_value: 1
 
 expert:
   num_trajectories: 20
