@@ -23,9 +23,9 @@ set -euo pipefail
 # Optional best hyperparams (export before running; empty = no override)
 : "${BEST_AIRL_ENTROPY:=0.005}"
 : "${BEST_AIRL_CLIP:=1.0}"
-: "${BEST_CAIRL_KL:=}"
-: "${BEST_CAIRL_INV:=}"
-: "${BEST_CAIRL_LATENT:=}"
+: "${BEST_CAIRL_KL:=0.001}"
+: "${BEST_CAIRL_INV:=0.02}"
+: "${BEST_CAIRL_LATENT:=8}"
 
 # Setup log file
 mkdir -p results/logs
@@ -53,7 +53,13 @@ OVRS=()
 [ -n "$BEST_CAIRL_INV" ]    && OVRS+=( "--override" "irl.inv_coeff=${BEST_CAIRL_INV}" )
 [ -n "$BEST_CAIRL_LATENT" ] && OVRS+=( "--override" "irl.latent_dim=${BEST_CAIRL_LATENT}" )
 
-$PY "${COMMON[@]}" "${OVRS[@]}" | tee -a $LOG
+if [ -n "$BEST_AIRL_ENTROPY" ]; then COMMON+=( "--grid" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" ); fi
+if [ -n "$BEST_AIRL_CLIP" ];    then COMMON+=( "--grid" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" ); fi
+if [ -n "$BEST_CAIRL_KL" ]; then COMMON+=( "--grid" "irl.kl_coeff=${BEST_CAIRL_KL}" ); fi
+if [ -n "$BEST_CAIRL_INV" ];    then COMMON+=( "--grid" "irl.inv_coeff=${BEST_CAIRL_INV}" ); fi
+if [ -n "$BEST_CAIRL_LATENT" ]; then COMMON+=( "--grid" "irl.latent_dim=${BEST_CAIRL_LATENT}" ); fi
+
+$PY "${COMMON[@]}" | tee -a $LOG
 
 echo "========== Causal-AIRL Experiments Complete ==========" | tee -a $LOG
 echo "Saving log to results/logs/causal_airl_scenarios.log"

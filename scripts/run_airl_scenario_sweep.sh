@@ -42,11 +42,10 @@ COMMON=( "-m" "experiments.sweeps"
          "--grid" "env.slip_prob=0.0,0.1,0.2"
          "--grid" "env.reward_type=sparse,shaped" )
 
-OVRS=()
-[ -n "$BEST_AIRL_ENTROPY" ] && OVRS+=( "--override" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" )
-[ -n "$BEST_AIRL_CLIP" ]    && OVRS+=( "--override" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" )
+if [ -n "$BEST_AIRL_ENTROPY" ]; then COMMON+=( "--grid" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" ); fi
+if [ -n "$BEST_AIRL_CLIP" ];    then COMMON+=( "--grid" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" ); fi
 
-$PY "${COMMON[@]}" "${OVRS[@]}" | tee -a $LOG
+$PY "${COMMON[@]}" | tee -a $LOG
 
 # Footer
 echo "========== AIRL Experiments Complete ==========" | tee -a $LOG

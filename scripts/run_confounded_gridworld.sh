@@ -23,9 +23,9 @@ set -euo pipefail
 # Optional best hyperparams (export before running; empty = no override)
 : "${BEST_AIRL_ENTROPY:=0.005}"
 : "${BEST_AIRL_CLIP:=1.0}"
-: "${BEST_CAIRL_KL:=}"
-: "${BEST_CAIRL_INV:=}"
-: "${BEST_CAIRL_LATENT:=}"
+: "${BEST_CAIRL_KL:=0.001}"
+: "${BEST_CAIRL_INV:=0.02}"
+: "${BEST_CAIRL_LATENT:=8}"
 
 # Setup log file
 mkdir -p results/logs

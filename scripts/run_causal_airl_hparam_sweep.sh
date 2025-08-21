@@ -40,20 +40,17 @@ COMMON=( "-m" "experiments.sweeps"
          "--grid" "irl.kl_coeff=0.001,0.003,0.01"
          "--grid" "irl.inv_coeff=0.0,0.02,0.05"
          "--grid" "irl.latent_dim=2,4,8"
-         "--grid" "irl.num_z_samples=1"
+         "--grid" "irl.num_z_samples=5"
          "--grid" "irl.gamma=0.99"
          "--grid" "expert.num_trajectories=20"
-         "--grid" "expert.confounder_value=0"
          "--grid" "env.name=ConfoundedGridWorld"
          "--grid" "env.slip_prob=0.0"
          "--grid" "env.reward_type=sparse" )
 
-# Optional overrides from best hyperparams (shared training knobs)
-OVRS=()
-[ -n "$BEST_AIRL_ENTROPY" ] && OVRS+=( "--override" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" )
-[ -n "$BEST_AIRL_CLIP" ]    && OVRS+=( "--override" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" )
+if [ -n "$BEST_AIRL_ENTROPY" ]; then COMMON+=( "--grid" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" ); fi
+if [ -n "$BEST_AIRL_CLIP" ];    then COMMON+=( "--grid" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" ); fi
 
-$PY "${COMMON[@]}" "${OVRS[@]}" | tee -a $LOG
+$PY "${COMMON[@]}" | tee -a $LOG
 
 # Footer
 echo "========== Causal-AIRL Experiments Complete ==========" | tee -a $LOG
