@@ -46,13 +46,6 @@ COMMON=( "-m" "experiments.sweeps"
          "--grid" "env.reward_type=sparse,shaped"
          "--grid" "irl.num_z_samples=1,5" )
 
-OVRS=()
-[ -n "$BEST_AIRL_ENTROPY" ] && OVRS+=( "--override" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" )
-[ -n "$BEST_AIRL_CLIP" ]    && OVRS+=( "--override" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" )
-[ -n "$BEST_CAIRL_KL" ]     && OVRS+=( "--override" "irl.kl_coeff=${BEST_CAIRL_KL}" )
-[ -n "$BEST_CAIRL_INV" ]    && OVRS+=( "--override" "irl.inv_coeff=${BEST_CAIRL_INV}" )
-[ -n "$BEST_CAIRL_LATENT" ] && OVRS+=( "--override" "irl.latent_dim=${BEST_CAIRL_LATENT}" )
-
 if [ -n "$BEST_AIRL_ENTROPY" ]; then COMMON+=( "--grid" "irl.entropy_coef=${BEST_AIRL_ENTROPY}" ); fi
 if [ -n "$BEST_AIRL_CLIP" ];    then COMMON+=( "--grid" "irl.grad_clip_norm=${BEST_AIRL_CLIP}" ); fi
 if [ -n "$BEST_CAIRL_KL" ]; then COMMON+=( "--grid" "irl.kl_coeff=${BEST_CAIRL_KL}" ); fi
