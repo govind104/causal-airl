@@ -140,7 +140,7 @@ class CausalDiscriminator(nn.Module):
         full_reward, _ = self.f(s_flat, a_flat, s_p_flat, z_flat)  # [num_samples * batch_size, 1]
         full_reward = full_reward.view(num_samples, batch_size, -1)  # [num_samples, batch_size, 1]
 
-        return full_reward.var(dim=0).mean()  # [batch_size, 1] → scalar
+        return full_reward.var(dim=0, unbiased=False).mean()  # [batch_size, 1] → scalar
 
 class CausalAIRLAgent:
     """Complete Causal AIRL agent with training and evaluation"""
@@ -326,8 +326,12 @@ class CausalAIRLAgent:
                     z_samples = mu.unsqueeze(0) + std.unsqueeze(0) * eps  # [K, B, Z]
                     z_samples_detached = z_samples.detach()  # STOP-GRAD through z for invariance loss
 
-                    # invariance penalty via discriminator helper (keeps graph)
-                    inv_var = self.discriminator.invariance_loss(s, a_enc, s_p, z_samples_detached)
+                    # If K<2 invariance is undefined; treat as zero penalty (stable & consistent)
+                    if num_z_samples < 2:
+                        inv_var = torch.tensor(0.0, device=self.device)
+                    else:
+                        # invariance penalty via discriminator helper (keeps graph)
+                        inv_var = self.discriminator.invariance_loss(s, a_enc, s_p, z_samples_detached)
 
                     # Direct variance metric (detached, no-grad)
                     with torch.no_grad():
@@ -356,9 +360,11 @@ class CausalAIRLAgent:
                 # Get discriminator outputs
                 f_out, _ = self.discriminator.f(s, a_enc, s_p, z_kl)
                 d_pred = self.discriminator.D(f_out, log_pi)
+                # Guard BCE against exact 0/1 saturation
+                d_pred_safe = d_pred.clamp(1e-6, 1 - 1e-6)
 
                 # Compute losses
-                disc_bce = F.binary_cross_entropy(d_pred, y)
+                disc_bce = F.binary_cross_entropy(d_pred_safe, y)
 
                 # Single invariance penalty: tensor inv_var stays in computational graph
                 mi_proxy = mu.pow(2).mean()
