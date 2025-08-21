@@ -10,6 +10,17 @@ from visualisation.utils_config import get
 from experiments.stats import bootstrap_mean_ci
 
 
+# Canonical metric aliases:
+# - Prefer Spearman over Pearson when both exist.
+# - Accept common legacy/sidecar names for robustness scalars.
+METRIC_ALIASES = {
+    "final_reward_correlation": ["final_reward_spearman", "reward_spearman", "reward_correlation"],
+    "final_reward_spearman": ["final_reward_spearman", "reward_spearman"],
+    "final_reward_variance": ["final_reward_variance", "final_reward_variance_across_z", "reward_variance"],
+    "final_spearman_worstZ": ["final_spearman_worstZ", "spearman_worstZ"],
+    "final_valuecorr_worstZ": ["final_valuecorr_worstZ", "valuecorr_worstZ"],
+}
+
 def flatten_list_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Convert list-valued columns to scalars by taking their mean."""
     for col in df.columns:
@@ -154,6 +165,24 @@ def _write_markdown(df: pd.DataFrame, md_path: str):
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(_to_markdown_table(df))
 
+def _resolve_metrics_against_df(df: pd.DataFrame, metrics: list[str]) -> list[str]:
+    """
+    Resolve requested metric names to columns present in `df` using METRIC_ALIASES.
+    This prefers Spearman when 'final_reward_correlation' is requested and both exist.
+    """
+    resolved: list[str] = []
+    cols = set(df.columns)
+    for m in metrics:
+        if m in cols:
+            resolved.append(m)
+            continue
+        for alt in METRIC_ALIASES.get(m, []):
+            if alt in cols:
+                resolved.append(alt); break
+        else:
+            resolved.append(m)  # leave as-is; later checks will drop if missing
+    return resolved
+
 def main():
     parser = argparse.ArgumentParser(description="Generate summary tables with confidence intervals")
     parser.add_argument("--csv", nargs='+', required=True, help="Path(s) to summary CSV(s)")
@@ -186,6 +215,9 @@ def main():
     # Load data
     df = load_experiment_csv(args.csv)
     df = flatten_list_columns(df)
+
+    # Prefer canonical columns (e.g., Spearman over Pearson; robustness aliases)
+    metrics = _resolve_metrics_against_df(df, metrics)
 
     # Ensure canonical dotted columns exist (copy from common aliases if missing) :contentReference[oaicite:0]{index=0}
     if 'env.slip_prob' not in df.columns:
@@ -277,6 +309,9 @@ def main():
     if missing_metrics:
         print(f"Warning: Missing metric columns: {missing_metrics}")
         metrics = [m for m in metrics if m in df.columns]
+        if not metrics:
+            print("Note: After alias resolution, no requested metrics were present. "
+                  "If you intended Pearson, consider using final_reward_spearman (preferred).")
 
     if not groupby or not metrics:
         # Write placeholder CSV for determinism

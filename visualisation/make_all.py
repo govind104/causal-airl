@@ -33,13 +33,13 @@ SCENARIOS = ['baseline','shaped','noisy','noisy_shaped','confounded','confounded
 
 # Ablation grids
 ABLS_X = ['expert.num_trajectories','env.slip_prob','env.reward_type','irl.gamma']
-ABLS_Y = ['final_reward_correlation','final_policy_agreement','final_value_correlation']
+ABLS_Y = ['final_reward_spearman','final_value_correlation','final_policy_agreement']
 ABLS_GROUPS = ['method']
 
 # Curves & tradeoffs
 CURVE_METRICS = ['reward_correlation','policy_agreement']
-TRADEOFF_PAIRS = [('final_reward_correlation','final_policy_agreement'),
-                  ('final_reward_correlation','final_value_correlation')]
+TRADEOFF_PAIRS = [('final_reward_spearman','final_policy_agreement'),
+                  ('final_reward_spearman','final_value_correlation')]
 
 # Training-curve metrics (small fan-out, includes losses when available)
 TRAIN_CURVE_METRICS = ['reward_correlation','policy_agreement','discriminator_loss','policy_loss']
@@ -48,7 +48,7 @@ TRAIN_CURVE_METRICS = ['reward_correlation','policy_agreement','discriminator_lo
 K_VALUES = [10]
 
 # Compute–accuracy metrics
-COMPUTE_METRICS = ['reward_correlation','policy_agreement','value_correlation']
+COMPUTE_METRICS = ['reward_spearman','value_correlation','policy_agreement']
 
 def _dedup(seq: List[str]) -> List[str]:
     seen = set()
@@ -175,7 +175,12 @@ def _steps(out_base: str, roots: List[str]) -> List[Dict]:
             "plot_causal_invariance",
             _out(out_base, _pick_out_subdir("plot_causal_invariance")),
             roots,
-            ["--mode", "across_runs", "--groupby", "env.confounder_value", "--metric", "var"],
+            ["--mode", "across_runs",
+             "--groupby", "env.confounder_value",
+             "--metric", "var",
+             *(["--perz_csv", "results/tables/perz_results.csv"]
+               if os.path.exists("results/tables/perz_results.csv") else [])
+            ],
         ),
     ))
     # 6
@@ -211,7 +216,7 @@ def _steps(out_base: str, roots: List[str]) -> List[Dict]:
             "plot_tradeoffs",
             _out(out_base, _pick_out_subdir("plot_tradeoffs")),
             roots,
-            ["--metric", "final_reward_correlation",
+            ["--metric", "final_reward_spearman",
              "--x", "final_env_steps",
              "--facet", "scenario",
              "--facet_rows"],
@@ -240,9 +245,9 @@ def _steps(out_base: str, roots: List[str]) -> List[Dict]:
         cmd=lambda: _build(
             "plot_tradeoffs",
             _out(out_base, os.path.join(_pick_out_subdir("plot_tradeoffs"),
-                                        "x=final_wall_time_sec", "y=final_reward_correlation")),
+                                        "x=final_wall_time_sec", "y=final_reward_spearman")),
             roots,
-            ["--metric", "final_reward_correlation",
+            ["--metric", "final_reward_spearman",
              "--x", "final_wall_time_sec",
              "--facet", "scenario",
              "--facet_rows"],
@@ -258,13 +263,24 @@ def _steps(out_base: str, roots: List[str]) -> List[Dict]:
     s.append(dict(
         mod="plot_crossz_bars",
         tags=["crossz"],
-        cmd=lambda: _build("plot_crossz_bars", _out(out_base, _pick_out_subdir("plot_crossz_bars")), roots, []),
+        cmd=lambda: _build(
+            "plot_crossz_bars",
+            _out(out_base, _pick_out_subdir("plot_crossz_bars")),
+            roots,
+            [*(["--perz_csv", "results/tables/perz_results.csv"]
+               if os.path.exists("results/tables/perz_results.csv") else [])],
+        ),
     ))
     # 11
     s.append(dict(
         mod="plot_reward_stats",
         tags=["rewards"],
-        cmd=lambda: _build("plot_reward_stats", _out(out_base, _pick_out_subdir("plot_reward_stats")), roots, []),
+        cmd=lambda: _build(
+            "plot_reward_stats",
+            _out(out_base, _pick_out_subdir("plot_reward_stats")),
+            roots,
+            [],
+        ),
     ))
     # 12
     s.append(dict(

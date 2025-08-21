@@ -12,9 +12,12 @@ from visualisation.utils_config import find_run_dirs, flatten_config, get
 from visualisation.style import setup_thesis_style, save_figure, method_label, set_method_color_cycle
 
 CANDIDATE_KEYS = {
+    "reward_spearman": ["final_reward_spearman", "reward_spearman"],
     "reward_correlation": ["final_reward_correlation", "reward_correlation", "reward_corr"],
-    "policy_agreement": ["final_policy_agreement", "policy_agreement"],
-    "value_correlation": ["final_value_correlation", "value_correlation"],
+    "policy_agreement": ["final_policy_agreement", "policy_agreement",
+                         "final_policy_agreement_weighted", "policy_agreement_weighted"],
+    "value_correlation": ["final_value_correlation", "value_correlation",
+                          "final_value_correlation_weighted", "value_correlation_weighted"],
 }
 
 GRID_RE = re.compile(r"\[(\d+),\s*\1\]")
@@ -45,7 +48,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--perf", default=os.path.join("results", "scaling", "perf.csv"))
     p.add_argument("--roots", default=os.path.join("results", "scaling"))
-    p.add_argument("--metric", default="reward_correlation",
+    p.add_argument("--metric", default="reward_spearman",
                    choices=list(CANDIDATE_KEYS.keys()))
     p.add_argument("--out", required=True)
     args = p.parse_args()

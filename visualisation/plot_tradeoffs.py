@@ -1,6 +1,7 @@
 import argparse
 import os
 import pandas as pd
+import numpy as np
 import json
 import matplotlib
 matplotlib.use("Agg", force=True)
@@ -18,6 +19,9 @@ def _last(x: Any):
     if isinstance(x, (list, tuple)) and len(x) > 0:
         return x[-1]
     return x
+
+def _finite_or_nan(x):
+    return float(x) if x is not None and not (isinstance(x, float) and (np.isnan(x) or np.isinf(x))) else np.nan
 
 def load_data_from_metrics(run_dirs):
     """Load final metrics from run directories."""
@@ -62,9 +66,14 @@ def load_data_from_metrics(run_dirs):
             'scenario': scenario,
             'final_wall_time_sec': _last(get(metrics, 'final_wall_time_sec') or get(metrics, 'wall_time_sec')),
             'final_env_steps': _last(get(metrics, 'final_env_steps') or get(metrics, 'env_steps')),
+            # Spearman support (candidate keys)
+            'final_reward_spearman': _last(get(metrics, 'final_reward_spearman') or get(metrics, 'reward_spearman')),
             'final_reward_correlation': _last(get(metrics, 'final_reward_correlation') or get(metrics, 'reward_correlation')),
-            'final_value_correlation': _last(get(metrics, 'final_value_correlation') or get(metrics, 'value_correlation')),
-            'final_policy_agreement': _last(get(metrics, 'final_policy_agreement') or get(metrics, 'policy_agreement')),
+            # Weighted fallbacks for value/policy
+            'final_value_correlation': _last(get(metrics, 'final_value_correlation') or get(metrics, 'value_correlation')
+                                             or get(metrics, 'final_value_correlation_weighted') or get(metrics, 'value_correlation_weighted')),
+            'final_policy_agreement': _last(get(metrics, 'final_policy_agreement') or get(metrics, 'policy_agreement')
+                                            or get(metrics, 'final_policy_agreement_weighted') or get(metrics, 'policy_agreement_weighted')),
         }
         records.append(record)
 
@@ -124,17 +133,40 @@ def plot_tradeoffs(csv_path: Optional[str], roots: Optional[list], metric: str,
         print("No valid data to plot.")
         return
 
+    # ---- Candidate-key resolution for metric column (CSV or roots) ----
+    def _resolve_metric_column(frame: pd.DataFrame, key: str) -> str:
+        if key in frame.columns:
+            return key
+        # Spearman aliases
+        if key == 'final_reward_spearman':
+            for alt in ['reward_spearman']:
+                if alt in frame.columns: return alt
+        # Value: allow weighted fallbacks
+        if key == 'final_value_correlation':
+            for alt in ['value_correlation', 'final_value_correlation_weighted', 'value_correlation_weighted']:
+                if alt in frame.columns: return alt
+        # Policy: allow weighted fallbacks
+        if key == 'final_policy_agreement':
+            for alt in ['policy_agreement', 'final_policy_agreement_weighted', 'policy_agreement_weighted']:
+                if alt in frame.columns: return alt
+        # Pearson legacy (no-op; kept for completeness)
+        if key == 'final_reward_correlation' and 'reward_correlation' in frame.columns:
+            return 'reward_correlation'
+        return key
+
+    metric_col = _resolve_metric_column(df, metric)
+
     # Ensure facet exists
     if facet not in df.columns:
         print(f"Facet column '{facet}' missing — falling back to 'method'.")
         facet = 'method'
 
     # Coerce numeric cols; drop non-numeric rows
-    for col in [metric, x_axis]:
+    for col in [metric_col, x_axis]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    needed_cols = ['method', facet, metric, x_axis]
+    needed_cols = ['method', facet, metric_col, x_axis]
     missing = [c for c in needed_cols if c not in df.columns]
     if missing:
         print(f"Missing columns for plot: {missing}")
@@ -143,13 +175,13 @@ def plot_tradeoffs(csv_path: Optional[str], roots: Optional[list], metric: str,
     df = df.dropna(subset=needed_cols)
 
     # Ensure numeric values for scatter plot
-    df[metric] = pd.to_numeric(df[metric], errors='coerce')
+    df[metric_col] = pd.to_numeric(df[metric_col], errors='coerce')
     df[x_axis] = pd.to_numeric(df[x_axis], errors='coerce')
-    df = df.dropna(subset=[metric, x_axis])
+    df = df.dropna(subset=[metric_col, x_axis])
 
     facets = sorted(df[facet].unique())
     # First log line with effective options
-    print(f"[tradeoffs] source={'CSV:'+csv_path if csv_path else 'roots'} facet={facet} metric={metric} x={x_axis} "
+    print(f"[tradeoffs] source={'CSV:'+csv_path if csv_path else 'roots'} facet={facet} metric={metric}→{metric_col} x={x_axis} "
           f"facets={len(facets)} facet_rows={facet_rows}")
 
     # Layout branch
@@ -182,7 +214,7 @@ def plot_tradeoffs(csv_path: Optional[str], roots: Optional[list], metric: str,
         method_counts: Dict[str, int] = {}
         for method, gdf in subdf.groupby('method'):
             method_counts[method] = len(gdf)
-            ax.scatter(gdf[x_axis], gdf[metric], label=method, alpha=0.7, s=50)
+            ax.scatter(gdf[x_axis], gdf[metric_col], label=method, alpha=0.7, s=50)
 
         # Title with per-method Ns
         counts_str = ", ".join([f"{m}: N={n}" for m, n in sorted(method_counts.items())])
@@ -191,7 +223,7 @@ def plot_tradeoffs(csv_path: Optional[str], roots: Optional[list], metric: str,
         # Axes labels
         ax.set_xlabel(x_axis.replace('_', ' ').title() +
                      (" (seconds)" if 'time' in x_axis else " (steps)" if 'steps' in x_axis else ""))
-        ax.set_ylabel(metric.replace('_', ' ').title())
+        ax.set_ylabel(metric_col.replace('_', ' ').title())
         ax.grid(True, alpha=0.3)
         ax.xaxis.set_major_locator(MaxNLocator(nbins=5))
         ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
@@ -221,7 +253,10 @@ def main():
     parser.add_argument('--roots', nargs='*', help='Root directories with runs')
     parser.add_argument('--csv', default=None, help='Optional CSV file path')
     parser.add_argument('--metric', required=True,
-                       choices=['final_reward_correlation', 'final_value_correlation', 'final_policy_agreement'],
+                       choices=['final_reward_spearman',
+                                'final_reward_correlation',
+                                'final_value_correlation',
+                                'final_policy_agreement'],
                        help='Metric to plot')
     parser.add_argument('--x', required=True,
                        choices=['final_wall_time_sec', 'final_env_steps'],

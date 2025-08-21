@@ -6,6 +6,7 @@ import matplotlib
 matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 from visualisation.utils_config import find_run_dirs, flatten_config, get
 from visualisation.style import setup_thesis_style, save_figure, method_label, set_method_color_cycle
@@ -14,13 +15,26 @@ from visualisation.scenario import label_scenario
 
 CI_LEVEL = 0.95
 
-def plot_crossz_bars(roots, out_dir):
+def plot_crossz_bars(roots, out_dir, perz_csv=None):
     """Plot cross-Z generalization bars."""
     setup_thesis_style()
     run_dirs = find_run_dirs(roots)
 
     # Collect data by scenario and method
     data = {}
+
+    # Optional per-Z CSV for worst-Z overlays
+    perz_df = None
+    if perz_csv and os.path.exists(perz_csv):
+        try:
+            perz_df = pd.read_csv(perz_csv)
+            # Ensure numeric for filtering/aggregates
+            for c in ["env.slip_prob", "final_reward_spearman", "final_value_correlation"]:
+                if c in perz_df.columns:
+                    perz_df[c] = pd.to_numeric(perz_df[c], errors="coerce")
+        except Exception as e:
+            print(f"[crossz] warn: failed to read perZ CSV '{perz_csv}': {e}")
+            perz_df = None
 
     print(f"[crossz] roots={roots} | discovered_runs={len(run_dirs)}")
 
@@ -188,7 +202,42 @@ def plot_crossz_bars(roots, out_dir):
 
         ax.set_xlabel('Cross-Z Direction')
         ax.set_ylabel('Policy Agreement')
-        ax.set_title(f'Cross-Z Generalization: {scenario}')
+        # Optional overlay: worst-Z badges from perZ CSV filtered by scenario slip
+        title = f'Cross-Z Generalization: {scenario}'
+        if perz_df is not None:
+            # Parse slip from scenario key suffix: "..._crossz_slip{xx.xx}"
+            slip_match = None
+            if "slip" in scenario:
+                try:
+                    slip_match = float(scenario.rsplit("slip", 1)[-1])
+                except Exception:
+                    slip_match = None
+            if slip_match is not None and "env.slip_prob" in perz_df.columns:
+                mask = perz_df["env.slip_prob"].round(2) == round(slip_match, 2)
+                sub = perz_df.loc[mask].copy()
+                # Compute worst-Z per run (min over z), then mean across runs
+                if not sub.empty and "run_path" in sub.columns:
+                    grp = sub.groupby("run_path", dropna=False)
+                    sp_worst = grp["final_reward_spearman"].min().mean() if "final_reward_spearman" in sub.columns else np.nan
+                    # ValueCorr with weighted fallbacks (robust to older perZ CSVs)
+                    vc_candidates = ["final_value_correlation",
+                                     "final_value_correlation_weighted",
+                                    "value_correlation_weighted"]
+                    vc_col = next((c for c in vc_candidates if c in sub.columns), None)
+                    vc_worst = grp[vc_col].min().mean() if vc_col else np.nan
+                else:
+                    sp_worst = sub["final_reward_spearman"].min() if "final_reward_spearman" in sub.columns else np.nan
+                    vc_candidates = ["final_value_correlation",
+                                     "final_value_correlation_weighted",
+                                     "value_correlation_weighted"]
+                    vc_col = next((c for c in vc_candidates if c in sub.columns), None)
+                    vc_worst = sub[vc_col].min() if vc_col else np.nan
+                parts = []
+                if pd.notna(sp_worst): parts.append(f"Worst-Z Spearman={sp_worst:.3f}")
+                if pd.notna(vc_worst): parts.append(f"Worst-Z ValueCorr={vc_worst:.3f}")
+                if parts:
+                    title = f"{title} — " + " | ".join(parts)
+        ax.set_title(title)
         ax.set_xticks(x)
         ax.set_xticklabels(clean_labels)
         
@@ -223,9 +272,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--roots', nargs='+', required=True, help='Root directories with runs')
     parser.add_argument('--out', required=True, help='Output directory')
+    parser.add_argument('--perz_csv', default=None, help='Optional per-Z CSV for worst-Z overlays')
     args = parser.parse_args()
 
-    plot_crossz_bars(args.roots, args.out)
+    plot_crossz_bars(args.roots, args.out, perz_csv=args.perz_csv)
 
 if __name__ == '__main__':
     main()

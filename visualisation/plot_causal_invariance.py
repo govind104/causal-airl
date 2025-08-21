@@ -2,6 +2,7 @@ import argparse
 import os
 import glob
 import json
+import pandas as pd
 import numpy as np
 import matplotlib
 matplotlib.use("Agg", force=True)
@@ -354,7 +355,7 @@ def per_run_mode(run_dir, per_z_subdir, metric, save_path, title, overlay_termin
     return variance, mean_var, n_maps
 
 def across_runs_mode(roots, groupby_key, per_z_subdir, metric, save_path, base_title,
-                     overlay_terminals=True, overlay_heldout=True):
+                     overlay_terminals=True, overlay_heldout=True, perz_csv: Optional[str] = None):
     """Process multiple runs grouped by confounder value"""
     grouped_items = load_across_runs_data(roots, groupby_key, per_z_subdir)
 
@@ -388,6 +389,55 @@ def across_runs_mode(roots, groupby_key, per_z_subdir, metric, save_path, base_t
     if len(group_vals) <= 3:  # Show values if not too many
         title += f"\nValues: {', '.join(group_vals)}"
 
+    # Optional: overlay numeric worst-Z badges from perZ CSV (if provided)
+    if perz_csv and os.path.exists(perz_csv):
+        try:
+            perz = pd.read_csv(perz_csv)
+            # If the per-Z CSV has the same groupby column, restrict to the active groups
+            if groupby_key in perz.columns:
+                # group_vals are strings; cast CSV col to str to compare robustly
+                perz = perz[perz[groupby_key].astype(str).isin(group_vals)]
+                # If that filtered everything out, fall back to the full CSV
+                if perz.empty:
+                    perz = pd.read_csv(perz_csv)
+
+            # Compute worst-Z per run (min over z), then mean across runs
+            have_sp = "final_reward_spearman" in perz.columns
+            # Value correlation with weighted fallbacks
+            vc_candidates = [
+                "final_value_correlation",
+                "final_value_correlation_weighted",
+                "value_correlation_weighted",
+            ]
+            vc_col = next((c for c in vc_candidates if c in perz.columns), None)
+            # Policy agreement with weighted fallbacks (usually already present, but safe)
+            pa_candidates = [
+                "final_policy_agreement",
+                "final_policy_agreement_weighted",
+                "policy_agreement_weighted",
+            ]
+            pa_col = next((c for c in pa_candidates if c in perz.columns), None)
+
+            parts = []
+            if "run_path" in perz.columns and (have_sp or vc_col or pa_col):
+                g = perz.groupby("run_path", dropna=False)
+                if have_sp:
+                    sp_worst_mean = pd.to_numeric(g["final_reward_spearman"].min(), errors="coerce").mean()
+                    if pd.notna(sp_worst_mean):
+                        parts.append(f"Worst-Z Spearman={sp_worst_mean:.3f}")
+                if vc_col:
+                    vc_worst_mean = pd.to_numeric(g[vc_col].min(), errors="coerce").mean()
+                    if pd.notna(vc_worst_mean):
+                        parts.append(f"Worst-Z ValueCorr={vc_worst_mean:.3f}")
+                if pa_col:
+                    pa_worst_mean = pd.to_numeric(g[pa_col].min(), errors="coerce").mean()
+                    if pd.notna(pa_worst_mean):
+                        parts.append(f"Worst-Z PolicyAgree={pa_worst_mean:.3f}")
+            if parts:
+                title += " — " + " | ".join(parts)
+        except Exception as e:
+            print(f"[invariance] warn: failed to read perZ CSV '{perz_csv}': {e}")
+
     variance, mean_var = compute_reward_variance(all_items, metric)
     # Try to locate an overlay from any run matching shape
     overlay = None
@@ -420,7 +470,8 @@ def main():
     parser.add_argument("--no-overlay_terminals", dest="overlay_terminals", action="store_false")
     parser.add_argument("--overlay_heldout", action="store_true", default=True, help="Overlay held-out mask")
     parser.add_argument("--no-overlay_heldout", dest="overlay_heldout", action="store_false")
-
+    parser.add_argument("--perz_csv", type=str, default=None, help="Optional per-Z CSV for worst-Z badges")
+    
     args = parser.parse_args()
 
     # Ensure output directory exists
@@ -442,7 +493,8 @@ def main():
         save_path = os.path.join(args.out, f"invariance_across_runs_{_sanitize(args.groupby)}__{args.metric}.png")
         variance, mean_var, total_n_maps, group_counts = across_runs_mode(
             args.roots, args.groupby, args.per_z_dir, args.metric, save_path, args.title,
-            overlay_terminals=args.overlay_terminals, overlay_heldout=args.overlay_heldout
+            overlay_terminals=args.overlay_terminals, overlay_heldout=args.overlay_heldout,
+            perz_csv=args.perz_csv
         )
 
     if variance is not None:

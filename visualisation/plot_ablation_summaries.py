@@ -45,7 +45,23 @@ X_KEY_ALIASES = {
 
 METRIC_ALIASES = {
     'final_reward_correlation': ['reward_correlation_final', 'final_reward_corr', 'reward_corr_final'],
-    'final_policy_agreement': ['policy_agreement_final', 'final_policy_agreement_mean'],
+    # Spearman (rank fidelity) alias for CSVs that log without 'final_'
+    'final_reward_spearman': ['reward_spearman'],
+    # Add weighted fallbacks for policy agreement
+    'final_policy_agreement': [
+        'policy_agreement_final',
+        'final_policy_agreement_mean',
+        'final_policy_agreement_weighted',
+        'policy_agreement_weighted',
+        # base (non-final) alias for older CSVs
+        'policy_agreement',
+    ],
+    # Add weighted fallbacks for value correlation
+    'final_value_correlation': [
+        'final_value_correlation_weighted', 'value_correlation_weighted',
+        # base (non-final) alias for older CSVs
+        'value_correlation',
+    ],
 }
 
 def _sanitize(s):
