@@ -8,6 +8,8 @@ from numpy import array, linalg
 # Embed TrueType for crisp PDF text
 mpl.rcParams['pdf.fonttype'] = 42
 mpl.rcParams['ps.fonttype'] = 42
+mpl.rcParams['mathtext.fontset'] = 'cm'
+mpl.rcParams['text.usetex'] = False
 
 def shrink_node(p1, p2, shape1='o', shape2='o'):
     # Approximate radii for circle vs square
@@ -175,9 +177,9 @@ def plot_gridworld_scm():
     Z   = r'$Z$'
     s   = r'$s$'
     piE = r'$\pi_E(a\mid s,z)$'
-    Tsa = r'$T(s^\prime \mid s,a)$'
+    Tsa = r"$T(s' \mid s,a)$"
     a   = r'$a$'
-    sp  = r'$s^\prime$'
+    sp  = r"$s'$"
 
     # Edges
     G.add_edges_from([
@@ -261,13 +263,13 @@ def plot_causal_airl_scm():
     # --- Nodes (mathtext) ---
     s    = r'$s$'
     a    = r'$a$'
-    sp   = r'$s^\prime$'
+    sp   = r"$s'$"
     z    = r'$z$'
     phi  = r'$\phi(s,a,z)$'
     D    = r'$D$'
     R    = r'$r_\theta$'
     Vs   = r'$V(s)$'
-    Vsp  = r'$V(s^\prime)$'
+    Vsp  = r"$V(s')$"
 
     # Edges
     G.add_edges_from([
