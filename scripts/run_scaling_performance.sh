@@ -54,7 +54,7 @@ for size in "${sizes[@]}"; do
         BASE="configs/causal_airl_ablation.yaml"
         OVRS=( "irl.entropy_coef=${BEST_AIRL_ENTROPY}" "irl.grad_clip_norm=${BEST_AIRL_CLIP}"
                "irl.kl_coeff=${BEST_CAIRL_KL}" "irl.inv_coeff=${BEST_CAIRL_INV}" "irl.latent_dim=${BEST_CAIRL_LATENT}"
-               "eval.save_dir=results/scaling/causal_airl" )
+               "irl.kl_warmup_epochs=100" "eval.save_dir=results/scaling/causal_airl" )
       elif [ "$method" = "ng" ]; then
         BASE="configs/gridworld_baseline_ng.yaml"
         OVRS=( "eval.save_dir=results/scaling/ng" )
@@ -70,6 +70,7 @@ for size in "${sizes[@]}"; do
         --override "env.grid_size=[${size},${size}]" \
         --override "env.reward_type=sparse" \
         --override "env.slip_prob=0.0" \
+        --override "irl.max_iters=200" \
         $(for o in "${OVRS[@]}"; do printf -- ' --override %q' "$o"; done) | tee -a $LOG
       END=$(date +%s)
       echo "$method,$size,$seed,$((END-START))" >> "$CSV"
