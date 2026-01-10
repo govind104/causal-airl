@@ -5,8 +5,9 @@ This repository contains the code and experiments for the MSc dissertation:
 **“Causal Inverse Reinforcement Learning for Robust Reward Recovery”**  
 *MSc Data Science, University of Edinburgh (2024–25)*
 
-> 🔗 **Interactive Demo:** [Causal-AIRL Streamlit App](https://causal-airl-demo.streamlit.app/) <br>
-> 📄 **[DISSERTATION.pdf](DISSERTATION.pdf)**
+🔗 **Interactive Demo:** [Causal-AIRL Streamlit App](https://causal-airl-demo.streamlit.app/) <br>
+
+📄 **[DISSERTATION.pdf](DISSERTATION.pdf)**
 
 The project studies how to recover rewards that generalize across **latent expert styles** (unobserved confounders) using causal variants of inverse reinforcement learning in a discrete **GridWorld** setting.
 
