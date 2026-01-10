@@ -304,7 +304,7 @@ def maxent_irl(
     return reward, logs
 
 
-# Helper functions for diagnostics and visualization
+# Helper functions for diagnostics and visualisation
 def compute_expected_features(
     feature_matrix: np.ndarray,
     trajectories: List[List[int]],

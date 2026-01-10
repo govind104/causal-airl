@@ -319,7 +319,7 @@ class CausalAIRLAgent:
                 kl_raw = kl_divergence(q_dist, p_dist).mean()
                 kl_post = torch.clamp(kl_raw, min=0.0, max=kl_clamp_max) # Clamp bound is configurable via config (default 10.0)
 
-                # Compute explicit invariance loss (vectorized & detached z)
+                # Compute explicit invariance loss (vectorised & detached z)
                 if inv_coeff > 0.0:
                     # Sample z from q(z|s,a) using mu,std from KL path with reparameterization
                     eps = torch.randn(num_z_samples, mu.shape[0], mu.shape[-1], device=self.device)
@@ -597,7 +597,7 @@ class CausalAIRLAgent:
             print("[q_warmstart] No labeled data collected - skipping")
             return
 
-        # Fully vectorized preparation
+        # Fully vectorised preparation
         states, actions, z_labels = zip(*labeled_data)
 
         # Build raw tensors first, then batch-encode

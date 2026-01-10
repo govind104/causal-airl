@@ -133,7 +133,7 @@ class AIRLDiscriminator(nn.Module):
     def reward(self, s, a, s_prime=None, log_pi=None):
         """
         Full AIRL reward: f(s,a,s') - log π(a|s) when log_pi provided
-        Otherwise returns f(s,a,s') for visualization
+        Otherwise returns f(s,a,s') for visualisation
         """
         with torch.no_grad():
             f = self.forward(s, a, s_prime if s_prime is not None else s)
@@ -640,7 +640,7 @@ class AIRLAgent:
 # ========== ENCODERS ========== #
 
 def create_onehot_encoder(num_classes: int):
-    """Optimized one-hot encoder"""
+    """Optimised one-hot encoder"""
     def encoder(x: torch.Tensor):
         assert x.dtype in (torch.long, torch.int), f"Expected integer action indices, got {x.dtype}"
         x = x.view(-1)  # Always flatten to 1D index vector
@@ -648,7 +648,7 @@ def create_onehot_encoder(num_classes: int):
     return encoder
 
 def create_gridworld_encoder(grid_size: int):
-    """Optimized gridworld encoder (2x faster)"""
+    """Optimised gridworld encoder (2x faster)"""
     def encoder(s: torch.Tensor):
         if s.shape[1] == 1:
             idx = s[:, 0].long()
