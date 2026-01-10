@@ -1,0 +1,23 @@
+# Streamlit app dependencies for Causal-AIRL Portfolio
+# Install with: pip install -r visualisation/streamlit_app/requirements.txt
+
+# Core Streamlit
+streamlit>=1.28.0
+
+# Visualization
+matplotlib>=3.7.0
+plotly>=5.18.0
+
+# Data handling
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Scientific computing
+scipy>=1.10.0
+
+# Machine learning (should already be installed via repo requirements)
+torch>=2.0.0
+
+# Note: The main repo requirements should already be installed:
+# pip install -e .
+# pip install -r requirements.txt

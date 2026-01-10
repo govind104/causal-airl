@@ -1,0 +1,167 @@
+/* Causal-AIRL Streamlit App - Custom Styling */
+
+/* Main font and colors matching thesis style */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+    --primary-color: #4A90D9;
+    --secondary-color: #2D5986;
+    --accent-color: #E8533F;
+    --background-dark: #1E1E2E;
+    --background-light: #F8F9FA;
+    --text-primary: #2C3E50;
+    --text-secondary: #6C757D;
+    --success-color: #28A745;
+    --warning-color: #FFC107;
+}
+
+/* Overall app styling */
+.stApp {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* Sidebar styling */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, var(--background-dark) 0%, #2D3748 100%);
+}
+
+[data-testid="stSidebar"] .stMarkdown {
+    color: #E2E8F0;
+}
+
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3 {
+    color: #FFFFFF;
+}
+
+/* Metric cards */
+[data-testid="stMetric"] {
+    background: linear-gradient(135deg, #FFFFFF 0%, #F8F9FA 100%);
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    border-left: 4px solid var(--primary-color);
+}
+
+[data-testid="stMetricLabel"] {
+    color: #2C3E50 !important;
+    font-weight: 600;
+}
+
+[data-testid="stMetricValue"] {
+    font-weight: 700;
+    color: var(--primary-color);
+}
+
+/* Buttons */
+.stButton>button {
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 12px 24px;
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+
+.stButton>button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(74, 144, 217, 0.4);
+}
+
+.stButton>button[kind="primary"] {
+    background: linear-gradient(135deg, var(--accent-color) 0%, #D63A2F 100%);
+}
+
+/* Headers */
+h1,
+h2,
+h3 {
+    color: var(--text-primary);
+    font-weight: 700;
+}
+
+h1 {
+    font-size: 2.5rem;
+    margin-bottom: 1rem;
+}
+
+/* Tables */
+.stDataFrame {
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+/* Info/Warning boxes */
+.stAlert {
+    border-radius: 8px;
+}
+
+/* Code blocks */
+.stCodeBlock {
+    border-radius: 8px;
+    background: #2D3748;
+}
+
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 8px;
+}
+
+.stTabs [data-baseweb="tab"] {
+    border-radius: 8px 8px 0 0;
+    padding: 12px 24px;
+    font-weight: 600;
+}
+
+/* Expanders */
+.streamlit-expanderHeader {
+    font-weight: 600;
+    color: var(--primary-color);
+}
+
+/* Progress bar */
+.stProgress>div>div {
+    background: linear-gradient(90deg, var(--primary-color), var(--accent-color));
+}
+
+/* Selectbox/Slider styling */
+.stSelectbox [data-baseweb="select"] {
+    border-radius: 8px;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #F1F1F1;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--primary-color);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--secondary-color);
+}
+
+/* Footer */
+footer {
+    opacity: 0.7;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    h1 {
+        font-size: 1.8rem;
+    }
+
+    [data-testid="stMetric"] {
+        padding: 12px;
+    }
+}
