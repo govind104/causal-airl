@@ -1,5 +1,5 @@
 # Synced with environment.yaml
-gymnasium[classic_control]
+gymnasium
 numpy
 scipy
 pandas
@@ -11,3 +11,10 @@ torch
 
 # Dev/testing (not installed as runtime dependency via setup.py)
 pytest
+
+# Streamlit portfolio app
+streamlit>=1.38.0
+plotly>=5.24.0
+scipy
+seaborn
+pandas

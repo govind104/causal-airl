@@ -14,7 +14,7 @@ setup(
         "PyYAML",
         "networkx",
         "psutil",
-        "gymnasium[classic_control]",
+        "gymnasium",
     ],
     extras_require={
         "dev": ["pytest"],
