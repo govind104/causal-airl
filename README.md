@@ -5,7 +5,7 @@ This repository contains the code and experiments for the MSc dissertation:
 **“Causal Inverse Reinforcement Learning for Robust Reward Recovery”**  
 *MSc Data Science, University of Edinburgh (2024–25)*
 
-🔗 **Interactive Demo:** [Causal-AIRL Streamlit App](https://causal-airl-demo.streamlit.app/) <br>
+🔗 **Interactive Demo:** [Causal-AIRL Streamlit App](https://causal-airl.streamlit.app/) <br>
 
 📄 **Dissertation PDF:** [DISSERTATION.pdf](DISSERTATION.pdf)
 
