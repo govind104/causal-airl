@@ -111,7 +111,7 @@ def _infer_eval_max_steps(env, cfg):
     return 1000
 
 def save_trajectories(policy, env, n_traj=10, z=None, torch_policy=True, device='cpu', state_encoder=None, max_steps: int = 1000):
-    """Save policy trajectories for visualization and analysis.
+    """Save policy trajectories for visualisation and analysis.
     Args:
         policy: torch policy (when torch_policy=True) or callable mapping s->a
         env: environment
@@ -251,7 +251,7 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
         reward = additional_data['reward']
         np.save(os.path.join(save_dir, 'learned_reward.npy'), reward)
 
-        # Also save 2D map for GridWorld visualization (save-time only)
+        # Also save 2D map for GridWorld visualisation (save-time only)
         env_obj = additional_data.get('env', None)
         if env_obj is not None and hasattr(env_obj, 'grid_size'):
             H, W = env_obj.grid_size
@@ -282,7 +282,7 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
                 inv_reward = additional_data['invariant_reward']
                 np.save(os.path.join(save_dir, 'invariant_reward.npy'), inv_reward)
 
-                # Save 2D map for GridWorld visualization
+                # Save 2D map for GridWorld visualisation
                 env_obj = additional_data.get('env', None)
                 if env_obj is not None and hasattr(env_obj, 'grid_size'):
                     H, W = env_obj.grid_size
@@ -293,7 +293,7 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
                 causal_reward = additional_data['causal_reward']
                 np.save(os.path.join(save_dir, 'causal_reward.npy'), causal_reward)
 
-                # Save 2D map for GridWorld visualization
+                # Save 2D map for GridWorld visualisation
                 env_obj = additional_data.get('env', None)
                 if env_obj is not None and hasattr(env_obj, 'grid_size'):
                     H, W = env_obj.grid_size
@@ -325,7 +325,7 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
                             reward_z_flat = np.asarray(reward_z).flatten()
                             np.save(os.path.join(per_z_dir, f'reward_z{i:03d}.npy'), reward_z_flat)
 
-                            # Save 2D reward map for visualization (reshape at save-time only)
+                            # Save 2D reward map for visualisation (reshape at save-time only)
                             env_obj = additional_data.get('env', None)
                             if env_obj is not None and hasattr(env_obj, 'grid_size'):
                                 H, W = env_obj.grid_size
@@ -361,7 +361,7 @@ def save_experiment_results(save_dir, cfg, metrics, additional_data):
                 torch.save(additional_data['encoder'].state_dict(), 
                            os.path.join(save_dir, 'encoder.pt'))
     
-    # 5. Environment data for visualization
+    # 5. Environment data for visualisation
     env = additional_data['env']
     # Ensure terminal_states is serialized as list of lists
     env_data = {
