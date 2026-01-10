@@ -353,7 +353,7 @@ class GridWorld(BaseEnv):
                     return self._cached_T
                 else:
                     print("[Warning] Cached dense T has wrong shape — rebuilding.")
-            # Build dense matrix (original behavior)
+            # Build dense matrix (original behaviour)
             T = np.zeros((self.n_states, self.n_actions, self.n_states))
             for i in range(self.n_rows):
                 for j in range(self.n_cols):
@@ -405,7 +405,7 @@ class SlipperyGridWorld(GridWorld):
 
 class ConfoundedGridWorld(GridWorld):
     """
-    GridWorld where expert behavior is influenced by latent confounder Z.
+    GridWorld where expert behaviour is influenced by latent confounder Z.
     Z affects expert action choices but is unobserved by standard learners.
     """
     def __init__(
@@ -440,7 +440,7 @@ class ConfoundedGridWorld(GridWorld):
         Always excludes off-grid actions to prevent stalls.
         """
         r, c = s
-        # Use nearest terminal so behavior adapts to any grid/goal set
+        # Use nearest terminal so behaviour adapts to any grid/goal set
         goal_r, goal_c = min(self.terminal_states, key=lambda t: abs(t[0]-r)+abs(t[1]-c))
 
         # 1) Goal-seeking preferences (reduce L1 distance)
