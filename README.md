@@ -7,7 +7,7 @@ This repository contains the code and experiments for the MSc dissertation:
 
 🔗 **Interactive Demo:** [Causal-AIRL Streamlit App](https://causal-airl-demo.streamlit.app/) <br>
 
-📄 **[DISSERTATION.pdf](DISSERTATION.pdf)**
+📄 **Dissertation PDF:** [DISSERTATION.pdf](DISSERTATION.pdf)
 
 The project studies how to recover rewards that generalize across **latent expert styles** (unobserved confounders) using causal variants of inverse reinforcement learning in a discrete **GridWorld** setting.
 
